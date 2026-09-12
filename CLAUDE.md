@@ -1,81 +1,87 @@
-# CLAUDE.md — guía de configuración asistida
+# CLAUDE.md — assisted setup guide
 
-Este archivo es para VOS, el asistente que está ayudando al usuario a poner en
-marcha este pipeline. El usuario probablemente te pidió algo como "configurame
-el pipeline según mi máquina". Tu trabajo es dejarle todo funcionando y
-acompañarlo en su primer vuelo.
+**Speak to the user in THEIR language (the repo's docs exist in English and
+Spanish); these instructions being in English does not mean the user speaks
+English.**
 
-**Regla de oro: validá cada paso ejecutando comandos reales.** No asumas que
-algo está instalado o configurado — verificalo. No avances al paso siguiente
-si el actual no quedó comprobado.
+This file is for YOU, the assistant helping the user get this pipeline up and
+running. The user probably asked you something like "set up the pipeline for
+my machine". Your job is to leave everything working and guide them through
+their first flight.
 
-**Contexto mínimo del repo** (leé los docstrings de `m3m/` para el detalle):
+**Golden rule: validate every step by running real commands.** Don't assume
+something is installed or configured — verify it. Don't move on to the next
+step until the current one is confirmed working.
 
-- `m3m/pipeline.py` — orquestador end-to-end: crudos del DJI Mavic 3M →
-  ortomosaico multibanda + índices (NDVI/GNDVI/NDRE/LCI) + DSM + nube + RGB.
-  Usa OpenDroneMap (ODM) en Docker como motor fotogramétrico.
-- `m3m/calibracion_m3m.py` — calibración radiométrica de los TIFF crudos
-  (cadena oficial DJI), la llama el pipeline.
-- `m3m/genera_cameras_fabrica.py` — extrae la calibración geométrica de
-  fábrica de la lente desde una foto del drone del usuario.
-- `m3m/fusion_misiones.py` — método alternativo (fusión de ortos por misión),
-  normalmente no hace falta.
+**Minimal repo context** (read the docstrings in `m3m/` for the details; the
+code and its docstrings are in Spanish):
+
+- `m3m/pipeline.py` — end-to-end orchestrator: DJI Mavic 3M raw photos →
+  multiband orthomosaic + indices (NDVI/GNDVI/NDRE/LCI) + DSM + point cloud +
+  RGB. Uses OpenDroneMap (ODM) in Docker as the photogrammetry engine.
+- `m3m/calibracion_m3m.py` — radiometric calibration of the raw TIFFs (the
+  official DJI chain), called by the pipeline.
+- `m3m/genera_cameras_fabrica.py` — extracts the factory geometric lens
+  calibration from a photo taken by the user's drone.
+- `m3m/fusion_misiones.py` — alternative method (per-mission orthomosaic
+  fusion), normally not needed.
 
 ---
 
-## Paso 1 — Detectar el hardware
+## Step 1 — Detect the hardware
 
-Ejecutá y anotá (PowerShell):
+Run and note down (PowerShell):
 
 ```powershell
-# RAM total y cores
+# Total RAM and cores
 Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory, NumberOfLogicalProcessors
-# GPU NVIDIA (si el comando no existe o falla, no hay GPU NVIDIA usable)
+# NVIDIA GPU (if the command doesn't exist or fails, there is no usable NVIDIA GPU)
 nvidia-smi
-# Discos y espacio libre
-Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='LibreGB';e={[math]::Round($_.Free/1GB)}}, @{n='TotalGB';e={[math]::Round(($_.Free+$_.Used)/1GB)}}
+# Drives and free space
+Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB)}}, @{n='TotalGB';e={[math]::Round(($_.Free+$_.Used)/1GB)}}
 ```
 
-Con eso decidí:
+Based on that, decide:
 
-- **RAM < 32 GB**: avisale honestamente que solo van a andar vuelos chicos
-  (<500 fotos) y con swap grande.
-- **RAM 32-64 GB**: vuelos chicos cómodos; vuelos de campo entero (2.000+
-  fotos) solo con swap generoso, va a ser lento pero termina.
-- **RAM 64-128 GB**: vuelos de campo entero sin drama.
-- **Disco**: identificá el disco más rápido (ideal NVMe) con ≥400 GB libres
-  para el `--workdir`. La regla general de espacio es **≥3× el tamaño del
-  vuelo** en crudos, y 300-400 GB temporales para un run denso grande.
+- **RAM < 32 GB**: tell them honestly that only small flights (<500 photos)
+  will work, and only with a large swap.
+- **RAM 32-64 GB**: small flights run comfortably; whole-field flights
+  (2,000+ photos) only with generous swap — slow, but it finishes.
+- **RAM 64-128 GB**: whole-field flights with no trouble.
+- **Disk**: identify the fastest drive (ideally NVMe) with ≥400 GB free for
+  the `--workdir`. The general space rule is **≥3× the size of the flight's
+  raw photos**, plus 300-400 GB of temporary space for a large dense run.
 
-## Paso 2 — Docker Desktop + WSL2 + .wslconfig
+## Step 2 — Docker Desktop + WSL2 + .wslconfig
 
-1. Verificá si Docker está instalado y andando: `docker info`. Fijate que el
-   backend sea WSL2 (línea `OSType: linux` y en Docker Desktop → Settings →
+1. Check whether Docker is installed and running: `docker info`. Make sure
+   the backend is WSL2 (line `OSType: linux`, and Docker Desktop → Settings →
    General → "Use the WSL 2 based engine").
-2. Si no está: guialo para instalar Docker Desktop (docker.com, gratis) con
-   el backend WSL2 (default del instalador). Puede requerir reinicio y
-   habilitar virtualización en BIOS — acompañalo.
-3. **Escribí `C:\Users\<usuario>\.wslconfig`** proporcional al hardware
-   detectado (sin esto, WSL se queda con la mitad de la RAM y ODM muere por
-   OOM en vuelos grandes):
+2. If it isn't there: guide them through installing Docker Desktop
+   (docker.com, free) with the WSL2 backend (the installer's default). It may
+   require a reboot and enabling virtualization in the BIOS — walk them
+   through it.
+3. **Write `C:\Users\<user>\.wslconfig`** proportional to the detected
+   hardware (without this, WSL keeps only half of the RAM and ODM dies from
+   OOM on large flights):
 
    ```ini
    [wsl2]
-   memory=<75-80% de la RAM total>GB
-   swap=<~= RAM total>GB
+   memory=<75-80% of total RAM>GB
+   swap=<~= total RAM>GB
    processors=<cores - 4>
    ```
 
-   Ejemplo para 128 GB / 32 cores: `memory=100GB`, `swap=128GB`,
-   `processors=28`. El swap dejalo apuntando (default) a un disco con espacio.
-4. Aplicá con `wsl --shutdown` (con Docker Desktop cerrado o reiniciándolo
-   después) y verificá con `docker run --rm alpine free -g` que la memoria
-   visible sea la configurada.
-5. Bajá la imagen de ODM: `docker pull opendronemap/odm` (son varios GB).
+   Example for 128 GB / 32 cores: `memory=100GB`, `swap=128GB`,
+   `processors=28`. Leave the swap pointing (default) at a drive with space.
+4. Apply with `wsl --shutdown` (with Docker Desktop closed, or restarting it
+   afterwards) and verify with `docker run --rm alpine free -g` that the
+   visible memory matches what you configured.
+5. Pull the ODM image: `docker pull opendronemap/odm` (it's several GB).
 
-## Paso 3 — Ambiente Python
+## Step 3 — Python environment
 
-1. ¿Hay conda? (`conda --version`). Si sí:
+1. Is conda available? (`conda --version`). If yes:
 
    ```
    conda env create -f environment.yml
@@ -83,11 +89,11 @@ Con eso decidí:
    pip install -e .
    ```
 
-2. Si NO hay conda: ofrecé instalar Miniconda (preferido) o, como plan B,
-   `python -m venv .venv` + pip. **Avisale que GDAL/rasterio por pip en
-   Windows son problemáticos** (ruedas que no compilan, DLLs que faltan) —
-   conda-forge es el camino recomendado; el venv solo si insiste.
-3. Validá con imports reales:
+2. If there is NO conda: offer to install Miniconda (preferred) or, as plan
+   B, `python -m venv .venv` + pip. **Warn them that GDAL/rasterio via pip on
+   Windows are troublesome** (wheels that fail to build, missing DLLs) —
+   conda-forge is the recommended path; the venv only if they insist.
+3. Validate with real imports:
 
    ```
    python -c "import rasterio, numpy, scipy, tifffile, exifread; print('ok')"
@@ -96,90 +102,93 @@ Con eso decidí:
    python -m m3m.pipeline --help
    ```
 
-## Paso 4 — Calibración del drone del usuario
+## Step 4 — Calibrating the user's drone
 
-**Este paso es obligatorio y es POR UNIDAD de drone**: DJI graba en cada foto
-la calibración geométrica de fábrica de ESA lente (campo XMP `DewarpData`).
-El `cameras_fabrica.ejemplo.json` del repo es de otro drone y solo sirve de
-referencia de formato.
+**This step is mandatory and is PER drone unit**: DJI records in every photo
+the factory geometric calibration of THAT lens (XMP field `DewarpData`). The
+repo's `cameras_fabrica.ejemplo.json` belongs to a different drone and only
+serves as a format reference.
 
-1. Pedile al usuario **una foto NIR cualquiera** de su Mavic 3M (un archivo
-   `DJI_..._MS_NIR.TIF` de cualquier vuelo, de la tarjeta o del disco).
-2. Corré:
-
-   ```
-   python -m m3m.genera_cameras_fabrica "<ruta a la foto NIR>"
-   ```
-
-3. Verificá que quedó `cameras_fabrica.json` en la raíz del repo y que los
-   valores impresos son razonables (focal ~2100-2250 px, cx/cy de pocos px).
-   Este archivo está en `.gitignore` a propósito: es del drone del usuario.
-
-## Paso 5 — Configuración según la máquina
-
-- `--workers` de la calibración: `min(8, cores / 2)`.
-- `--max-concurrency` de ODM: `cores - 4` (es el default del pipeline, que lo
-  calcula solo; pasalo explícito si querés otro valor).
-- `--workdir`: el disco rápido detectado en el paso 1 (default `C:\odm_work`;
-  cambialo si el disco C: no es el indicado). El pipeline aborta si hay
-  <400 GB libres.
-- **Si hay GPU NVIDIA**: ofrecé la variante `--gpu` (imagen
-  `opendronemap/odm:gpu` + `--gpus all`). Es EXPERIMENTAL y no está validada
-  en este repo: si el usuario acepta, **validala primero con un vuelo chico**
-  y comparando contra el mismo vuelo procesado sin GPU antes de usarla en
-  serio. Sin GPU no se pierde calidad, solo tiempo.
-
-## Paso 6 — Primer vuelo guiado
-
-1. Preguntale al usuario:
-   - ¿Dónde están las **carpetas de misión** del vuelo? (las crea el drone en
-     la tarjeta, tipo `DJI_202601011200_031`; un vuelo largo son varias).
-   - ¿Qué **productos** quiere? (`ndvi,gndvi,ndre,lci,orto,dsm,nube,rgb` —
-     para un primer vuelo sugerí `ndvi,ndre,orto,dsm`).
-   - ¿**Carpeta de salida**? (su basename es el nombre del proyecto y el
-     prefijo de los archivos finales).
-2. Lanzá:
+1. Ask the user for **any NIR photo** from their Mavic 3M (a
+   `DJI_..._MS_NIR.TIF` file from any flight, from the card or from disk).
+2. Run:
 
    ```
-   python -m m3m.pipeline --misiones "<mision1>" "<mision2>" ^
-       --productos ndvi,ndre,orto,dsm --salida "<carpeta_salida>"
+   python -m m3m.genera_cameras_fabrica "<path to the NIR photo>"
    ```
 
-3. El pipeline imprime líneas `##ETAPA## <slug> <pct>` (etapas: escaneo,
-   calibracion, odm, productos, rgb, movida, limpieza). Andá contándole al
-   usuario en qué etapa va y cuánto falta aproximadamente. La etapa `odm` es
-   la larga (horas en vuelos grandes); el resto son minutos.
-4. Al terminar, mostrale el `resumen.json` de la salida y sugerile abrir los
-   GeoTIFF en su software GIS.
+3. Verify that `cameras_fabrica.json` was created at the repo root and that
+   the printed values are reasonable (focal length ~2100-2250 px, cx/cy of a
+   few px). This file is in `.gitignore` on purpose: it belongs to the user's
+   drone.
 
-## Paso 7 — Problemas conocidos y sus fixes
+## Step 5 — Machine-specific configuration
 
-- **`--radiometric-calibration camera+sun` de ODM está ROTO para el M3M:
-  jamás usarlo.** La calibración radiométrica ya la hace este pipeline antes
-  de ODM (por eso corre con `none`).
-- **No usar `--ignore-gsd`**: infla RAM y disco sin mejora real.
-- **OOM de WSL**: si ODM muere de golpe (contenedor killed), casi siempre es
-  memoria. Cada crash puede dejar **volcados de ~100 GB** en
-  `%LOCALAPPDATA%\Temp\wsl-crashes` — revisá esa carpeta, limpiala, y ofrecé
-  crear una tarea programada de Windows que la purgue periódicamente. Después
-  ajustá `memory`/`swap` en `.wslconfig` o procesá un vuelo más chico.
-- **Fotos con MakerNote corrupto** (~1 cada 1.500-2.000): rompen ODM con
-  IndexError. El pipeline las detecta en la etapa `escaneo` y mueve la
-  captura completa a `<workdir>/cuarentena/` solo. No hay que hacer nada;
-  contale al usuario si pasó.
-- **Sin RTK**: los índices de vegetación sirven igual, pero el modelo de
-  elevación puede salir con un "domo" sistemático de **decenas de cm** entre
-  el centro y los bordes del lote (la autocalibración de lente en terreno
-  plano es ambigua; la corrección de fábrica ayuda pero el anclaje absoluto
-  fino requiere RTK). Explicale el límite honestamente: DSM sin RTK = formas
-  relativas orientativas, no cotas confiables.
-- **Espacio en disco**: regla práctica ≥3× el tamaño del vuelo en crudos,
-  además de los 300-400 GB temporales del workdir para runs densos grandes.
-  El pipeline verifica el workdir al arrancar, pero el disco de salida
-  también tiene que aguantar los productos finales.
+- Calibration `--workers`: `min(8, cores / 2)`.
+- ODM `--max-concurrency`: `cores - 4` (this is the pipeline's default, which
+  it computes on its own; pass it explicitly if you want a different value).
+- `--workdir`: the fast drive detected in step 1 (default `C:\odm_work`;
+  change it if drive C: is not the right one). The pipeline aborts if there
+  are <400 GB free.
+- **If there is an NVIDIA GPU**: offer the `--gpu` variant
+  (`opendronemap/odm:gpu` image + `--gpus all`). It is EXPERIMENTAL and not
+  validated in this repo: if the user accepts, **validate it first with a
+  small flight**, comparing against the same flight processed without GPU,
+  before relying on it. Without GPU you lose no quality, only time.
+
+## Step 6 — Guided first flight
+
+1. Ask the user:
+   - Where are the flight's **mission folders**? (the drone creates them on
+     the card, like `DJI_202601011200_031`; a long flight spans several).
+   - Which **products** do they want? (`ndvi,gndvi,ndre,lci,orto,dsm,nube,rgb`
+     — for a first flight suggest `ndvi,ndre,orto,dsm`).
+   - **Output folder?** (its basename becomes the project name and the prefix
+     of the final files).
+2. Launch:
+
+   ```
+   python -m m3m.pipeline --misiones "<mission1>" "<mission2>" ^
+       --productos ndvi,ndre,orto,dsm --salida "<output_folder>"
+   ```
+
+3. The pipeline prints `##ETAPA## <slug> <pct>` lines (stages: escaneo,
+   calibracion, odm, productos, rgb, movida, limpieza). Keep telling the user
+   which stage it is in and roughly how much is left. The `odm` stage is the
+   long one (hours on large flights); the rest take minutes.
+4. When it finishes, show them the `resumen.json` in the output folder and
+   suggest opening the GeoTIFFs in their GIS software.
+
+## Step 7 — Known problems and their fixes
+
+- **ODM's `--radiometric-calibration camera+sun` is BROKEN for the M3M:
+  never use it.** Radiometric calibration is already done by this pipeline
+  before ODM (which is why it runs with `none`).
+- **Do not use `--ignore-gsd`**: it inflates RAM and disk usage with no real
+  improvement.
+- **WSL OOM**: if ODM dies suddenly (container killed), it is almost always
+  memory. Each crash can leave **~100 GB dumps** in
+  `%LOCALAPPDATA%\Temp\wsl-crashes` — check that folder, clean it, and offer
+  to create a Windows scheduled task that purges it periodically. Then adjust
+  `memory`/`swap` in `.wslconfig` or process a smaller flight.
+- **Photos with a corrupt MakerNote** (~1 in every 1,500-2,000): they break
+  ODM with an IndexError. The pipeline detects them in the `escaneo` stage
+  and moves the whole capture to `<workdir>/cuarentena/` on its own. Nothing
+  to do; tell the user if it happened.
+- **No RTK**: vegetation indices are still fine, but the elevation model can
+  come out with a systematic "dome" of **tens of cm** between the center and
+  the edges of the field (lens self-calibration over flat ground is
+  ambiguous; the factory correction helps, but fine absolute anchoring
+  requires RTK). Explain the limitation honestly: DSM without RTK = relative
+  shapes for orientation, not reliable elevations.
+- **Disk space**: rule of thumb ≥3× the size of the flight's raw photos, on
+  top of the workdir's 300-400 GB of temporaries for large dense runs. The
+  pipeline checks the workdir at startup, but the output drive also has to
+  hold the final products.
 
 ---
 
-Si algo de esta guía no coincide con lo que ves en la máquina (versiones,
-rutas, mensajes de error nuevos), priorizá lo que observás y resolvé con
-criterio — esta guía describe el camino validado, no el único posible.
+If anything in this guide doesn't match what you see on the machine
+(versions, paths, new error messages), trust what you observe and solve it
+with good judgment — this guide describes the validated path, not the only
+possible one.

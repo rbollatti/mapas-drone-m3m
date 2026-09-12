@@ -1,3 +1,5 @@
+🇬🇧 [English version](MANUAL_INSTALL.md)
+
 # Instalación manual y uso
 
 Para el que prefiere hacerlo a mano en vez de la instalación asistida del
