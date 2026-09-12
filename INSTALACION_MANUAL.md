@@ -7,11 +7,10 @@ aunque instales a mano.)
 
 ## Calidad validada
 
-No es un experimento: se comparó contra **DJI Terra** (el software oficial
-pago de DJI) procesando **el mismo vuelo real**, y también contra mediciones
+No es un experimento: se comparó contra el software comercial de referencia procesando **el mismo vuelo real**, y también contra mediciones
 de clorofilómetro a campo:
 
-- **Índices de vegetación: correlación r = 0,93** con Terra, con el mismo
+- **Índices de vegetación: correlación r = 0,93**, con el mismo
   rango de valores.
 - **Elevación: ±1 cm de error absoluto** usando RTK y la corrección de lente
   de fábrica del propio drone (sin esa corrección, cualquier software libre

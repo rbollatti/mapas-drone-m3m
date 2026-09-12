@@ -57,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKDIR_DEFAULT = Path("C:/odm_work")  # SSD NVMe: ODM es I/O-intensivo (en HDD pierde 20-40%)
 ESPACIO_MIN_GB = 400  # un run denso ocupa 300-400 GB temporales
 RECORTE_BORDE_M = 15.0  # índices inflados en el perímetro (recortar subió r de 0,64 a 0,85)
-RESOLUCION_CM_DEFAULT = 7.4  # receta validada (r=0,93 vs DJI Terra)
+RESOLUCION_CM_DEFAULT = 7.4  # receta validada (r=0,93 vs referencia comercial)
 ODM_IMAGEN = "opendronemap/odm"
 ODM_IMAGEN_GPU = "opendronemap/odm:gpu"  # EXPERIMENTAL: no validada en este repo
 
@@ -228,7 +228,7 @@ def preparar_proyecto(proy: Path, boundary: Path | None) -> None:
 
 
 def args_odm_ms(resolucion_cm: float, con_boundary: bool, max_concurrency: int) -> list[str]:
-    """Flags de la receta validada (denso + lente de fábrica + RTK apretado, r=0,93 vs Terra)."""
+    """Flags de la receta validada (denso + lente de fábrica + RTK apretado, r=0,93 vs referencia comercial)."""
     a = ["--radiometric-calibration", "none", "--primary-band", "NIR", "--pc-filter", "2"]
     a += ["--boundary", "/datasets/code/boundary.geojson"] if con_boundary else ["--auto-boundary"]
     a += [

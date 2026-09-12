@@ -1,4 +1,4 @@
-"""Calibración radiométrica de TIFFs DJI Mavic 3M (estilo DJI Terra).
+"""Calibración radiométrica de TIFFs DJI Mavic 3M.
 
 Aplica la cadena oficial de DJI (Mavic 3M Image Processing Guide, Eq. 7-9)
 a cada TIFF multiespectral crudo:
@@ -29,7 +29,7 @@ Uso
     python -m m3m.calibracion_m3m todo   --src <dir_crudos> --dst <dir_salida>
 
 Luego ODM sobre <dir_salida> con la receta validada (denso + lente de
-fábrica + RTK apretado; r=0,93 vs DJI Terra)::
+fábrica + RTK apretado; r=0,93 vs software comercial de referencia)::
 
     docker run --rm -v <proyecto>:/datasets/code opendronemap/odm \\
         --project-path /datasets --radiometric-calibration none \\

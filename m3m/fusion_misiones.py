@@ -6,7 +6,7 @@ misión), este script fusiona los NDRE en un mosaico único del lote:
 
 1. Recorta ``--recorte-m`` metros del borde de cada orto (los bordes tienen
    NDRE inflado por geometría de vista; este paso subió r de 0,64 a 0,85 en
-   la validación contra Terra).
+   la validación de referencia).
 2. Armoniza por offset de mediana en el solape contra la primera misión
    (offsets típicos <0,003: el cociente NDRE cancela casi toda la deriva de
    sol entre misiones; NO usar ajuste lineal con pendiente, los solapes de

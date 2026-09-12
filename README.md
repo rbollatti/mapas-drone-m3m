@@ -1,8 +1,7 @@
 # mapas-drone-m3m
 
 Convertí las fotos crudas de tu **DJI Mavic 3M** en mapas listos para usar en
-el campo, **sin pagar licencias** (DJI Terra cuesta miles de euros; esto usa
-software libre).
+el campo, con software libre.
 
 ## Qué te da
 
