@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Orthomosaics, vegetation indices, DSM and point cloud from a DJI Mavic 3M, with free and open-source software (OpenDroneMap via Docker)"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Rodolfo Bollatti" }]
+authors = [{ name = "R. Bollatti" }]
 
 [tool.setuptools]
 packages = ["m3m"]
