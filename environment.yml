@@ -1,0 +1,17 @@
+# Ambiente conda del pipeline M3M.
+#   conda env create -f environment.yml && conda activate m3m
+# GDAL/rasterio por conda-forge (por pip son problemáticos en Windows).
+name: m3m
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - rasterio        # lectura/escritura de GeoTIFF y COG (índices, fusión)
+  - gdal>=3.8       # gdal_translate para convertir DSM/orto a COG
+  - numpy
+  - scipy           # erosión de bordes, suavizado gaussiano, feathering
+  - tifffile        # reescritura in-place de los TIFF del M3M (calibración)
+  - affine          # transformaciones raster (fusión de misiones)
+  - pip
+  - pip:
+      - exifread>=3.0   # escaneo EXIF pre-vuelo (detecta MakerNote corrupto)

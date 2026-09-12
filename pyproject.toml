@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m3m"
+version = "0.1.0"
+description = "Ortomosaicos, índices de vegetación, DSM y nube de puntos desde un DJI Mavic 3M, sin licencias pagas (ODM via Docker)"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Rodolfo Bollatti" }]
+
+[tool.setuptools]
+packages = ["m3m"]

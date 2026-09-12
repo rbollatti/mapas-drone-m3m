@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Calibración generada por cada usuario (es POR UNIDAD de drone; el repo
+# solo trackea cameras_fabrica.ejemplo.json)
+cameras_fabrica.json
+
+# Salidas locales
+/salidas/
