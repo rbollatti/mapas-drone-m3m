@@ -150,7 +150,7 @@ referencia de formato.
    usuario en qué etapa va y cuánto falta aproximadamente. La etapa `odm` es
    la larga (horas en vuelos grandes); el resto son minutos.
 4. Al terminar, mostrale el `resumen.json` de la salida y sugerile abrir los
-   GeoTIFF en QGIS.
+   GeoTIFF en su software GIS.
 
 ## Paso 7 — Problemas conocidos y sus fixes
 

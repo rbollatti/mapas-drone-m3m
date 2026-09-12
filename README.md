@@ -18,8 +18,8 @@ genera con un solo comando:
 - **Ortomosaico RGB**: la foto aérea "normal", en color real, de alta
   resolución.
 
-Todo georreferenciado y en formatos estándar (GeoTIFF/COG) que abren QGIS,
-Auravant o cualquier software GIS.
+Todo georreferenciado y en formatos estándar (GeoTIFF/COG) que abre
+cualquier software GIS.
 
 ## Qué necesitás
 
