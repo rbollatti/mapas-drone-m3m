@@ -221,19 +221,32 @@
   #mapa { flex: 1; background: #babfba; }
   #visor-leyenda {
     position: absolute; left: 12px; bottom: 20px; z-index: 2100;
-    display: none; align-items: center; gap: 8px;
+    display: none; flex-direction: column; align-items: flex-start; gap: 6px;
     background: rgba(255, 255, 255, .93); border: 1px solid var(--borde);
     border-radius: 8px; padding: 7px 12px; font-size: 12.5px;
     box-shadow: 0 1px 4px rgba(0, 0, 0, .15);
   }
   #visor-leyenda.visible { display: flex; }
   #visor-leyenda b { font-size: 12.5px; }
+  .leyenda-fila { display: flex; align-items: center; gap: 8px; }
   .leyenda-barra {
     width: 150px; height: 12px; border-radius: 3px; border: 1px solid var(--borde);
     /* RdYlGn de ColorBrewer, mismas 11 clases que usa el servidor */
     background: linear-gradient(to right, #a50026, #d73027, #f46d43, #fdae61,
       #fee08b, #ffffbf, #d9ef8b, #a6d96a, #66bd63, #1a9850, #006837);
   }
+  .leyenda-barra.terrain {
+    /* 'terrain' de matplotlib, mismas anclas que usa el servidor para el DSM */
+    background: linear-gradient(to right, #333399 0%, #0099ff 15%, #00cc66 25%,
+      #ffff99 50%, #805c54 75%, #ffffff 100%);
+  }
+  /* botones de escala de colores (Fija / Contraste), junto a la leyenda */
+  .leyenda-escala { display: flex; align-items: center; gap: 6px; }
+  .btn-escala { font-size: 12px; padding: 2px 10px; font-weight: 500; border-radius: 999px; }
+  .btn-escala.activa {
+    background: var(--verde); border-color: var(--verde); color: #fff; font-weight: 600;
+  }
+  .leyenda-nota { color: var(--ambar); font-size: 11.5px; }
   footer { color: var(--gris); font-size: 12.5px; margin-top: 24px; text-align: center; }
 </style>
 </head>
@@ -354,10 +367,19 @@
   </div>
   <div id="mapa"></div>
   <div id="visor-leyenda">
-    <b id="leyenda-indice"></b>
-    <span id="leyenda-min"></span>
-    <div class="leyenda-barra"></div>
-    <span id="leyenda-max"></span>
+    <div class="leyenda-fila">
+      <b id="leyenda-indice"></b>
+      <span id="leyenda-min"></span>
+      <div class="leyenda-barra" id="leyenda-barra"></div>
+      <span id="leyenda-max"></span>
+    </div>
+    <div class="leyenda-escala">
+      <button id="btn-escala-fija" class="btn-escala activa" type="button"
+              title="Escala fija del índice: comparable entre vuelos">Fija</button>
+      <button id="btn-escala-contraste" class="btn-escala" type="button"
+              title="Estira los colores al rango real de este vuelo">Contraste</button>
+      <span id="leyenda-nota" class="leyenda-nota" hidden>no comparable entre vuelos</span>
+    </div>
   </div>
 </div>
 
@@ -406,6 +428,8 @@ const elAvisoServidor = $("aviso-servidor");
 const elVisor = $("visor"), elVisorTitulo = $("visor-titulo"), elVisorArchivo = $("visor-archivo");
 const elVisorCerrar = $("visor-cerrar"), elLeyenda = $("visor-leyenda");
 const elLeyendaIndice = $("leyenda-indice"), elLeyendaMin = $("leyenda-min"), elLeyendaMax = $("leyenda-max");
+const elLeyendaBarra = $("leyenda-barra"), elLeyendaNota = $("leyenda-nota");
+const elBtnEscalaFija = $("btn-escala-fija"), elBtnEscalaContraste = $("btn-escala-contraste");
 const elCantHist = $("cant-hist"), elListaHistorial = $("lista-historial");
 const elResultadosHist = $("resultados-historial"), elMsgHistorial = $("msg-historial");
 const elAbrirSalida = $("abrir-salida"), elBtnAbrir = $("btn-abrir");
@@ -938,6 +962,9 @@ const MIN_ZOOM = 12;
 
 let mapa = null;          // instancia Leaflet, se crea una vez y se reusa
 let capaProducto = null;  // capa de tiles del producto abierto
+let capaVisor = null;     // datos de la capa abierta (para recrearla al cambiar de escala)
+let escalaModo = "fija";  // "fija" | "contraste"; se resetea a "fija" en cada apertura
+let visorSeq = 0;         // invalida fetches de stats viejos al abrir otro producto
 
 function nombreArchivo(ruta) { return String(ruta).split(/[\\/]/).pop(); }
 
@@ -981,28 +1008,124 @@ async function abrirVisor(p) {
     mapa = L.map("mapa", { minZoom: MIN_ZOOM, maxZoom: maxZoom });
   }
   mapa.setMaxZoom(maxZoom);
-  if (capaProducto) { mapa.removeLayer(capaProducto); capaProducto = null; }
-  capaProducto = L.tileLayer(
-    "/api/tiles/{z}/{x}/{y}.png?archivo=" + encodeURIComponent(archivo)
-      + "&tipo=" + encodeURIComponent(tipo) + extra,
-    { tileSize: 256, minZoom: MIN_ZOOM, maxNativeZoom: nativo, maxZoom: maxZoom, bounds: limites, noWrap: true });
-  capaProducto.addTo(mapa);
+  capaVisor = { archivo: archivo, extra: extra, tipo: tipo, nativo: nativo,
+                maxZoom: maxZoom, limites: limites, stats: null };
+  ponerCapaTiles(null, null);                // arranca siempre con la escala default
   mapa.invalidateSize(false);                // el contenedor recién se hizo visible
   // sin animación: si no, el encuadre puede quedar a medio camino al reabrir
   mapa.fitBounds(limites, { padding: [24, 24], animate: false });
 
-  const escala = ESCALA_FIJA[p.tipo];        // leyenda solo para índices
-  if (escala) {
-    elLeyendaIndice.textContent = nombreProducto(p.tipo);
-    elLeyendaMin.textContent = escala[0].toFixed(2);
-    elLeyendaMax.textContent = escala[1].toFixed(2);
-    elLeyenda.classList.add("visible");
-  } else {
-    elLeyenda.classList.remove("visible");
-  }
+  prepararLeyenda(p);
 }
 
 function cerrarVisor() { elVisor.classList.remove("abierto"); }
+
+/* --------- escala de colores: Fija (comparable) vs Contraste del vuelo --- */
+
+// (re)crea la capa de tiles del producto abierto; con vmin/vmax la URL manda
+// &vmin&vmax y el servidor overridea su escala de colores default
+function ponerCapaTiles(vmin, vmax) {
+  const c = capaVisor;
+  let url = "/api/tiles/{z}/{x}/{y}.png?archivo=" + encodeURIComponent(c.archivo)
+    + "&tipo=" + encodeURIComponent(c.tipo) + c.extra;
+  if (vmin !== null && vmax !== null) url += "&vmin=" + vmin + "&vmax=" + vmax;
+  if (capaProducto) { mapa.removeLayer(capaProducto); capaProducto = null; }
+  capaProducto = L.tileLayer(url, { tileSize: 256, minZoom: MIN_ZOOM,
+    maxNativeZoom: c.nativo, maxZoom: c.maxZoom, bounds: c.limites, noWrap: true });
+  capaProducto.addTo(mapa);
+}
+
+// mín/máx de la leyenda: los índices son adimensionales, el DSM va en metros
+function formatearValorEscala(v) {
+  return capaVisor.tipo === "dsm" ? v.toFixed(1) + " m" : v.toFixed(2);
+}
+
+// rango del modo contraste: p2-p98 del raster para índices (el default del
+// DSM ya ES p2-p98, ahí el contraste extra es el mín-máx completo)
+function rangoContraste() {
+  const s = capaVisor.stats;
+  return capaVisor.tipo === "dsm" ? [s.min, s.max] : [s.p2, s.p98];
+}
+
+// leyenda + botones de escala al abrir un producto: solo bandas únicas
+// (índices y DSM); el rgb no tiene escala de colores
+function prepararLeyenda(p) {
+  escalaModo = "fija";
+  const seq = ++visorSeq;
+  const c = capaVisor;
+  if (c.tipo === "rgb") {
+    elLeyenda.classList.remove("visible");
+    return;
+  }
+
+  const esDsm = c.tipo === "dsm";
+  elLeyendaIndice.textContent = nombreProducto(p.tipo);
+  elLeyendaBarra.classList.toggle("terrain", esDsm);
+  // el DSM no tiene escala fija agronómica: su default ya es p2-p98 del vuelo
+  elBtnEscalaFija.textContent = esDsm ? "p2–p98" : "Fija";
+  elBtnEscalaContraste.textContent = esDsm ? "Mín–máx" : "Contraste";
+  elBtnEscalaFija.classList.add("activa");
+  elBtnEscalaContraste.classList.remove("activa");
+  elBtnEscalaContraste.disabled = true;      // hasta tener las estadísticas
+  elLeyendaNota.hidden = true;
+
+  if (esDsm) {
+    elLeyendaMin.textContent = "…"; elLeyendaMax.textContent = "…";
+  } else {
+    const esc = ESCALA_FIJA[c.tipo];
+    elLeyendaMin.textContent = esc[0].toFixed(2);
+    elLeyendaMax.textContent = esc[1].toFixed(2);
+  }
+  elLeyenda.classList.add("visible");
+
+  // p2/p98 y mín/máx reales del raster: habilitan el botón de contraste y
+  // completan los números del DSM (cuya escala default depende del vuelo)
+  fetch("/api/tiles/stats?archivo=" + encodeURIComponent(c.archivo)
+        + "&tipo=" + encodeURIComponent(c.tipo) + c.extra)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((datos) => {
+      if (seq !== visorSeq || !datos || !datos.bandas || !datos.bandas.b1) return;
+      c.stats = datos.bandas.b1;
+      if (esDsm) {
+        elLeyendaMin.textContent = formatearValorEscala(c.stats.p2);
+        elLeyendaMax.textContent = formatearValorEscala(c.stats.p98);
+      }
+      const rango = rangoContraste();
+      if (rango[1] > rango[0]) elBtnEscalaContraste.disabled = false;
+    })
+    .catch(() => {});  // sin stats: queda la escala default, botón deshabilitado
+}
+
+function cambiarEscala(modo) {
+  if (!capaVisor || capaVisor.tipo === "rgb" || modo === escalaModo) return;
+  if (modo === "contraste" && !capaVisor.stats) return;
+  escalaModo = modo;
+  elBtnEscalaFija.classList.toggle("activa", modo === "fija");
+  elBtnEscalaContraste.classList.toggle("activa", modo === "contraste");
+
+  const esDsm = capaVisor.tipo === "dsm";
+  if (modo === "contraste") {
+    const rango = rangoContraste();
+    ponerCapaTiles(rango[0], rango[1]);
+    elLeyendaMin.textContent = formatearValorEscala(rango[0]);
+    elLeyendaMax.textContent = formatearValorEscala(rango[1]);
+  } else {
+    // sin vmin/vmax en la URL: el servidor vuelve a su escala default
+    // (fija del índice / p2-p98 del DSM)
+    ponerCapaTiles(null, null);
+    if (esDsm) {
+      elLeyendaMin.textContent = formatearValorEscala(capaVisor.stats.p2);
+      elLeyendaMax.textContent = formatearValorEscala(capaVisor.stats.p98);
+    } else {
+      const esc = ESCALA_FIJA[capaVisor.tipo];
+      elLeyendaMin.textContent = esc[0].toFixed(2);
+      elLeyendaMax.textContent = esc[1].toFixed(2);
+    }
+  }
+  // estirados al vuelo, los colores de un índice dejan de ser comparables
+  // entre fechas (el DSM nunca lo es: la nota ahí no agrega nada)
+  elLeyendaNota.hidden = !(modo === "contraste" && !esDsm);
+}
 
 /* ================= arranque ================= */
 
@@ -1018,6 +1141,8 @@ elDetalleLog.addEventListener("toggle", () => {
   if (elDetalleLog.open) elLogTail.scrollTop = elLogTail.scrollHeight;
 });
 elVisorCerrar.addEventListener("click", cerrarVisor);
+elBtnEscalaFija.addEventListener("click", () => cambiarEscala("fija"));
+elBtnEscalaContraste.addEventListener("click", () => cambiarEscala("contraste"));
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && elVisor.classList.contains("abierto")) cerrarVisor();
 });

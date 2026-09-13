@@ -29,7 +29,10 @@ API (JSON, prefijo /api)
   rio-tiler, para el visor Leaflet de la página. ``archivo`` es SIEMPRE
   relativo a ``salida`` (una carpeta del historial; default: la del último
   trabajo). Índices → paleta RdYlGn con escala fija por índice; dsm → paleta
-  terrain con p2-p98; rgb → render directo. Cache LRU chico en memoria.
+  terrain con p2-p98; rgb → render directo. ``vmin``/``vmax`` opcionales
+  (los dos juntos o ninguno) overridean la escala de colores para bandas
+  únicas — los usa el botón "Contraste" del visor; para rgb se ignoran.
+  Cache LRU chico en memoria.
 - ``GET  /api/tiles/bounds?archivo=<rel>&salida=<dir>`` — bounds del raster
   en EPSG:4326 (``[oeste, sur, este, norte]``) para centrar el mapa.
 - ``GET  /api/tiles/stats?archivo=<rel>&salida=<dir>`` — min/max/p2/p50/p98
@@ -46,6 +49,7 @@ lugar del pipeline real — sirve para probar la interfaz sin drone ni Docker.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import struct
@@ -802,16 +806,22 @@ def _escala_de(path: Path, tipo: str) -> tuple[float, float]:
     return float(b1["p2"]), float(b1["p98"])
 
 
-def _render_tile(path: Path, tipo: str, z: int, x: int, y: int) -> bytes:
+def _render_tile(path: Path, tipo: str, z: int, x: int, y: int,
+                 vmin: float | None = None, vmax: float | None = None) -> bytes:
     """PNG 256 px del tile XYZ WebMercator ``z/x/y`` del GeoTIFF.
 
     - índices / DSM (1 banda): reescala a la escala del tipo y colorea
       (RdYlGn los índices, terrain el DSM); nodata queda transparente.
-    - rgb / orto (>=3 bandas): bandas 1-3; uint8 directo, float estirado p2-p98.
+      ``vmin``/``vmax`` (los dos o ninguno) overridean esa escala — los usa
+      el botón "Contraste" del visor para estirar los colores al rango real
+      del vuelo.
+    - rgb / orto (>=3 bandas): bandas 1-3; uint8 directo, float estirado
+      p2-p98 (acá vmin/vmax no aplican).
 
     Deja propagar ``rio_tiler.errors.TileOutsideBounds`` (→ 404 en el endpoint).
     """
-    clave = (str(path), int(path.stat().st_mtime), tipo, z, x, y)
+    # vmin/vmax van en la clave: tiles con escalas distintas NO deben colisionar
+    clave = (str(path), int(path.stat().st_mtime), tipo, z, x, y, vmin, vmax)
     with _tiles_lock:
         png = _tiles_cache.get(clave)
         if png is not None:
@@ -833,7 +843,8 @@ def _render_tile(path: Path, tipo: str, z: int, x: int, y: int) -> bytes:
                     (st[f"b{i}"]["p2"], st[f"b{i}"]["p98"]) for i in (1, 2, 3)))
             png = img.render(img_format="PNG")
         else:
-            vmin, vmax = _escala_de(path, tipo)
+            if vmin is None or vmax is None:  # sin override: escala del tipo
+                vmin, vmax = _escala_de(path, tipo)
             img.rescale(in_range=((vmin, vmax),))
             png = img.render(
                 img_format="PNG",
@@ -877,17 +888,29 @@ def tiles_stats(archivo: str = "", tipo: str = "", salida: str = ""):
 
 
 @app.get("/api/tiles/{z}/{x}/{y}.png")
-def tiles_png(z: int, x: int, y: int, archivo: str = "", tipo: str = "", salida: str = ""):
+def tiles_png(z: int, x: int, y: int, archivo: str = "", tipo: str = "",
+              salida: str = "", vmin: float | None = None, vmax: float | None = None):
     if not (0 <= z <= 24):
         raise HTTPException(400, "zoom fuera de rango (0-24)")
+    # vmin/vmax: override opcional de la escala de colores (botón "Contraste"
+    # del visor) — van los dos juntos, finitos y con vmax > vmin
+    if (vmin is None) != (vmax is None):
+        raise HTTPException(400, "vmin y vmax van juntos: mandá los dos o ninguno")
+    if vmin is not None:
+        if not (math.isfinite(vmin) and math.isfinite(vmax)):
+            raise HTTPException(400, "vmin y vmax deben ser números finitos")
+        if vmax <= vmin:
+            raise HTTPException(400, "vmax debe ser mayor que vmin")
     f = _resolver_en_salida(archivo, salida)
     _rio_tiler_disponible()
     t = _tipo_visor(f, tipo)
+    if t == "rgb":  # el render multibanda no usa escala: se ignoran
+        vmin = vmax = None
 
     from rio_tiler.errors import TileOutsideBounds
 
     try:
-        png = _render_tile(f, t, z, x, y)
+        png = _render_tile(f, t, z, x, y, vmin, vmax)
     except TileOutsideBounds:
         raise HTTPException(404, "tile fuera del área del raster")
     except HTTPException:
