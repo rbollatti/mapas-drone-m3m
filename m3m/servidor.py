@@ -15,16 +15,25 @@ API (JSON, prefijo /api)
 - ``POST /api/trabajo/cancelar`` — mata el árbol de procesos y hace
   ``docker rm -f`` del contenedor del trabajo.
 - ``GET  /api/vista?archivo=<path>`` — miniatura PNG de un GeoTIFF, SOLO si
-  está dentro de la carpeta de salida del último trabajo.
-- ``GET  /api/tiles/{z}/{x}/{y}.png?archivo=<rel>&tipo=<producto>`` — tile XYZ
-  (WebMercator, 256 px) renderizado al vuelo desde el GeoTIFF con rio-tiler,
-  para el visor Leaflet de la página. ``archivo`` es SIEMPRE relativo a la
-  carpeta de salida del último trabajo (misma validación que /api/vista).
-  Índices → paleta RdYlGn con escala fija por índice; dsm → paleta terrain
-  con p2-p98; rgb → render directo. Cache LRU chico en memoria.
-- ``GET  /api/tiles/bounds?archivo=<rel>`` — bounds del raster en EPSG:4326
-  (``[oeste, sur, este, norte]``) para centrar el mapa.
-- ``GET  /api/tiles/stats?archivo=<rel>`` — min/max/p2/p50/p98 por banda.
+  está dentro de una carpeta de salida conocida (la del último trabajo o
+  cualquiera del historial).
+- ``GET  /api/historial`` — trabajos terminados y carpetas abiertas a mano
+  (``trabajos/historial.json``), más reciente primero.
+- ``POST /api/abrir`` — ``{salida: <carpeta>}``: escanea esa carpeta por
+  productos ``<nombre>_<tipo>.tif`` (más ``.laz``, solo listado) y la agrega
+  al historial como fuente "abierta". El historial SOLO crece por trabajos
+  propios o por este POST del usuario local (un path que él mismo pegó),
+  nunca por datos remotos — y es lo que define qué carpetas sirve la API.
+- ``GET  /api/tiles/{z}/{x}/{y}.png?archivo=<rel>&tipo=<producto>&salida=<dir>``
+  — tile XYZ (WebMercator, 256 px) renderizado al vuelo desde el GeoTIFF con
+  rio-tiler, para el visor Leaflet de la página. ``archivo`` es SIEMPRE
+  relativo a ``salida`` (una carpeta del historial; default: la del último
+  trabajo). Índices → paleta RdYlGn con escala fija por índice; dsm → paleta
+  terrain con p2-p98; rgb → render directo. Cache LRU chico en memoria.
+- ``GET  /api/tiles/bounds?archivo=<rel>&salida=<dir>`` — bounds del raster
+  en EPSG:4326 (``[oeste, sur, este, norte]``) para centrar el mapa.
+- ``GET  /api/tiles/stats?archivo=<rel>&salida=<dir>`` — min/max/p2/p50/p98
+  por banda.
 
 El estado se persiste en ``<repo>/trabajos/ultimo.json`` y el log del trabajo
 en ``<repo>/trabajos/ultimo.log``: si el servidor se reinicia con un trabajo
@@ -71,6 +80,7 @@ WEB = Path(__file__).resolve().parent / "web"
 TRABAJOS_DIR = REPO / "trabajos"
 ESTADO_FILE = TRABAJOS_DIR / "ultimo.json"
 LOG_FILE = TRABAJOS_DIR / "ultimo.log"
+HISTORIAL_FILE = TRABAJOS_DIR / "historial.json"
 
 HOST = "127.0.0.1"
 PUERTO = 8600
@@ -88,6 +98,10 @@ ESCALA_FIJA: dict[str, tuple[float, float]] = {
     "lci": (0.05, 0.55),
 }
 TIPOS_VISOR = ("ndvi", "gndvi", "ndre", "lci", "dsm", "rgb")
+
+# Tipos reconocidos en nombres de archivo ``<nombre>_<tipo>.tif`` (los del
+# pipeline). dsm_ms ANTES que dsm para que gane el sufijo más largo.
+TIPOS_ARCHIVO = ("ndvi", "gndvi", "ndre", "lci", "orto", "dsm_ms", "dsm", "rgb")
 
 # Cache LRU de tiles renderizados (PNG): el pan/zoom del visor repite tiles y
 # lo caro es el primer render. ~256 tiles × ~50-100 KB ≈ 25 MB máx.
@@ -210,6 +224,63 @@ def _leer_productos(salida: str) -> list[dict]:
             for p in resumen.get("productos", [])]
 
 
+# ------------------------------------------------------------- historial ----
+# trabajos/historial.json: trabajos terminados + carpetas abiertas a mano, más
+# reciente primero. Además de alimentar la sección "Mapas generados" de la
+# página, DEFINE qué carpetas puede servir la API (/api/vista y /api/tiles):
+# solo crece por trabajos propios o por POST /api/abrir del usuario local.
+
+_hist_lock = threading.Lock()
+
+
+def _hist_cargar() -> list[dict]:
+    """Lee historial.json (llamar con _hist_lock tomado)."""
+    try:
+        datos = json.loads(HISTORIAL_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return datos if isinstance(datos, list) else []
+
+
+def _hist_leer() -> list[dict]:
+    with _hist_lock:
+        return _hist_cargar()
+
+
+def _hist_registrar(entrada: dict) -> None:
+    """Agrega ``entrada`` al frente del historial; si ya había una con la misma
+    salida (normcase: Windows es case-insensitive), la reemplaza (re-generar el
+    mismo proyecto actualiza la entrada en vez de duplicarla)."""
+    clave = os.path.normcase(str(Path(entrada["salida"])))
+    with _hist_lock:
+        entradas = [e for e in _hist_cargar()
+                    if os.path.normcase(str(Path(str(e.get("salida", ""))))) != clave]
+        entradas.insert(0, entrada)
+        TRABAJOS_DIR.mkdir(exist_ok=True)
+        HISTORIAL_FILE.write_text(
+            json.dumps(entradas, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _salidas_permitidas() -> list[Path]:
+    """Carpetas desde las que la API sirve archivos: la salida del último
+    trabajo más todas las del historial (sin duplicados, resueltas)."""
+    with _lock:
+        actual = _trabajo.get("salida")
+    candidatas = ([actual] if actual else []) + \
+        [e.get("salida") for e in _hist_leer()]
+    salidas: list[Path] = []
+    vistas: set[str] = set()
+    for s in candidatas:
+        if not s:
+            continue
+        p = Path(str(s)).resolve()
+        clave = os.path.normcase(str(p))
+        if clave not in vistas:
+            vistas.add(clave)
+            salidas.append(p)
+    return salidas
+
+
 def _terminar(rc: int | None) -> None:
     """Cierra el estado del trabajo cuando el proceso terminó (rc None = sin código)."""
     with _lock:
@@ -222,6 +293,11 @@ def _terminar(rc: int | None) -> None:
             _trabajo["estado"] = "hecho"
             _trabajo["etapa"], _trabajo["pct"] = "limpieza", 100
             _trabajo["productos"] = productos
+            _hist_registrar({
+                "nombre": Path(salida).name, "salida": str(Path(salida)),
+                "fecha_fin": _trabajo["fin"], "fuente": "trabajo",
+                "productos": productos,
+            })
         else:
             _trabajo["estado"] = "error"
             _trabajo["error"] = (
@@ -327,24 +403,42 @@ def _normalizar(arr, valido):
     return salida
 
 
+def _tipo_de_stem(stem: str) -> str | None:
+    """Tipo de producto por convención de nombre del pipeline:
+    ``<nombre>_<tipo>.tif``, aceptando los aliases de publicación al final
+    (``_cog``, ``_anclado_cog``). None si no se reconoce."""
+    s = stem.lower()
+    while True:
+        for alias in ("_cog", "_anclado"):
+            if s.endswith(alias):
+                s = s[: -len(alias)]
+                break
+        else:
+            break
+    for t in TIPOS_ARCHIVO:
+        if s.endswith("_" + t):
+            return t
+    return None
+
+
 def _miniatura(archivo: Path) -> bytes:
     """GeoTIFF -> PNG ~1200 px: RdYlGn para índices, terrain para dsm, RGB directo."""
     import numpy as np
     import rasterio
     from rasterio.enums import Resampling
 
-    tipo = archivo.stem.rsplit("_", 1)[-1].lower()
+    tipo = _tipo_de_stem(archivo.stem) or archivo.stem.rsplit("_", 1)[-1].lower()
     with rasterio.open(archivo) as ds:
         esc = max(1.0, max(ds.width, ds.height) / MINIATURA_PX)
         ancho, alto = max(1, int(ds.width / esc)), max(1, int(ds.height / esc))
 
-        if tipo in INDICES or tipo == "dsm" or ds.count < 3:
+        if tipo in INDICES or tipo in ("dsm", "dsm_ms") or ds.count < 3:
             banda = ds.read(1, out_shape=(alto, ancho),
                             resampling=Resampling.nearest, masked=True)
             arr = banda.filled(np.nan).astype(np.float64)
             valido = np.isfinite(arr)
             norm = _normalizar(arr, valido)
-            if tipo == "dsm":
+            if tipo in ("dsm", "dsm_ms"):
                 rgba = _aplicar_cmap(norm, _TERRAIN_POS, _TERRAIN)
             elif tipo in INDICES:
                 rgba = _aplicar_cmap(norm, _RDYLGN_POS, _RDYLGN)
@@ -515,20 +609,20 @@ def cancelar_trabajo():
 
 @app.get("/api/vista")
 def vista(archivo: str):
-    with _lock:
-        salida = _trabajo.get("salida")
-    if not salida:
-        raise HTTPException(404, "todavía no hay ningún trabajo con salida conocida")
+    bases = [os.path.normcase(str(p)) for p in _salidas_permitidas()]
+    if not bases:
+        raise HTTPException(404, "todavía no hay ninguna carpeta de salida conocida")
     try:
         f = Path(archivo).resolve(strict=True)
     except OSError:
         raise HTTPException(404, f"no existe: {archivo}")
-    # SOLO archivos dentro de la salida del último trabajo (normcase: Windows
-    # es case-insensitive y resolve() puede devolver otra capitalización)
-    base = os.path.normcase(str(Path(salida).resolve()))
+    # SOLO archivos dentro de una salida conocida: la del último trabajo o las
+    # del historial (normcase: Windows es case-insensitive y resolve() puede
+    # devolver otra capitalización)
     objetivo = os.path.normcase(str(f))
-    if not (objetivo == base or objetivo.startswith(base + os.sep)):
-        raise HTTPException(403, "solo se sirven archivos de la carpeta de salida del último trabajo")
+    if not any(objetivo == b or objetivo.startswith(b + os.sep) for b in bases):
+        raise HTTPException(403, "solo se sirven archivos de las carpetas de salida "
+                                 "del historial o del último trabajo")
     if not f.is_file():
         raise HTTPException(404, f"no es un archivo: {archivo}")
     if f.suffix.lower() not in (".tif", ".tiff"):
@@ -541,35 +635,107 @@ def vista(archivo: str):
                     headers={"Cache-Control": "no-store"})
 
 
+class CarpetaAbrir(BaseModel):
+    salida: str
+
+
+@app.get("/api/historial")
+def ver_historial():
+    """Trabajos terminados + carpetas abiertas a mano, más reciente primero."""
+    return {"historial": _hist_leer()}
+
+
+@app.post("/api/abrir")
+def abrir_carpeta(c: CarpetaAbrir):
+    """Escanea una carpeta de salida ya existente por productos del pipeline
+    (``<nombre>_<tipo>.tif`` con aliases ``_cog``/``_anclado_cog``; ``.laz``
+    solo listado) y la agrega al historial con fuente "abierta". Es la única
+    forma de habilitar carpetas nuevas para /api/vista y /api/tiles, y solo
+    la dispara el usuario local pegando un path propio."""
+    ruta = (c.salida or "").strip()
+    if not ruta:
+        raise HTTPException(400, "falta la carpeta de salida")
+    base = Path(ruta)
+    if not base.is_dir():
+        raise HTTPException(404, f"la carpeta no existe: {ruta}")
+    base = base.resolve()
+
+    productos: list[dict] = []
+    ultima_mtime = 0.0
+    try:
+        archivos = sorted(base.iterdir(), key=lambda p: p.name.lower())
+    except OSError as e:
+        raise HTTPException(400, f"no pude leer la carpeta: {e}")
+    for f in archivos:
+        if not f.is_file():
+            continue
+        suf = f.suffix.lower()
+        if suf in (".tif", ".tiff"):
+            tipo = _tipo_de_stem(f.stem)
+            if tipo is None:
+                continue
+        elif suf == ".laz":
+            tipo = "nube"  # solo listado: no tiene visor ni miniatura
+        else:
+            continue
+        productos.append({"tipo": tipo, "archivo": str(f)})
+        ultima_mtime = max(ultima_mtime, f.stat().st_mtime)
+    if not productos:
+        raise HTTPException(
+            404, "no encontré productos del pipeline (<nombre>_<tipo>.tif / .laz) en esa carpeta")
+    orden = {t: i for i, t in enumerate((*TIPOS_ARCHIVO, "nube"))}
+    productos.sort(key=lambda p: orden.get(p["tipo"], 99))
+
+    entrada = {
+        "nombre": base.name, "salida": str(base),
+        # fecha del producto más nuevo: cuándo se generaron, no cuándo se abrió
+        "fecha_fin": datetime.fromtimestamp(ultima_mtime).isoformat(timespec="seconds"),
+        "fuente": "abierta", "productos": productos,
+    }
+    _hist_registrar(entrada)
+    return entrada
+
+
 # ------------------------------------------- visor de mapas (tiles XYZ) ----
 
-def _resolver_en_salida(archivo: str) -> Path:
-    """Path RELATIVO bajo la salida del último trabajo -> Path real validado.
+def _resolver_en_salida(archivo: str, salida: str = "") -> Path:
+    """Path RELATIVO bajo una carpeta de salida conocida -> Path real validado.
 
-    Misma política que /api/vista (solo archivos de esa carpeta), pero acá el
-    cliente manda el path relativo: nada absoluto, nada con ``..``, solo .tif.
+    Misma política que /api/vista (solo carpetas del historial o la del último
+    trabajo), pero acá el cliente manda el path relativo: nada absoluto, nada
+    con ``..``, solo .tif. ``salida`` elige la carpeta base (debe estar en el
+    historial); sin ``salida`` se usa la del último trabajo.
     """
-    with _lock:
-        salida = _trabajo.get("salida")
-    if not salida:
-        raise HTTPException(404, "todavía no hay ningún trabajo con salida conocida")
+    salida = (salida or "").strip()
+    if salida:
+        clave = os.path.normcase(str(Path(salida).resolve()))
+        base = next((p for p in _salidas_permitidas()
+                     if os.path.normcase(str(p)) == clave), None)
+        if base is None:
+            raise HTTPException(403, "esa carpeta de salida no está en el historial "
+                                     "de este servidor (abrila con POST /api/abrir)")
+    else:
+        with _lock:
+            ultima = _trabajo.get("salida")
+        if not ultima:
+            raise HTTPException(404, "todavía no hay ningún trabajo con salida conocida")
+        base = Path(ultima).resolve()
     archivo = (archivo or "").strip().replace("\\", "/")
     if not archivo:
         raise HTTPException(400, "falta el parámetro 'archivo'")
     p = Path(archivo)
     if p.is_absolute() or p.drive or ".." in p.parts:
         raise HTTPException(400, "'archivo' debe ser un path relativo a la carpeta "
-                                 "de salida del último trabajo, sin '..'")
+                                 "de salida, sin '..'")
     if p.suffix.lower() not in (".tif", ".tiff"):
         raise HTTPException(415, "el visor solo sirve GeoTIFF (.tif)")
-    base = Path(salida).resolve()
     real = (base / p).resolve()
     # normcase: Windows es case-insensitive y resolve() puede cambiar mayúsculas
     b, o = os.path.normcase(str(base)), os.path.normcase(str(real))
     if not (o == b or o.startswith(b + os.sep)):
-        raise HTTPException(403, "solo se sirven archivos de la carpeta de salida del último trabajo")
+        raise HTTPException(403, "'archivo' escapa la carpeta de salida")
     if not real.is_file():
-        raise HTTPException(404, f"no existe {p.as_posix()} en la salida del último trabajo")
+        raise HTTPException(404, f"no existe {p.as_posix()} en esa carpeta de salida")
     return real
 
 
@@ -590,9 +756,11 @@ def _tipo_visor(path: Path, tipo: str) -> str:
             raise HTTPException(
                 400, f"tipo '{tipo}' inválido; válidos: {', '.join(TIPOS_VISOR)}")
         return t
-    t = path.stem.rsplit("_", 1)[-1].lower()
+    t = _tipo_de_stem(path.stem)
     if t == "orto":  # multibanda: se muestra como RGB con las bandas 1-3
         return "rgb"
+    if t == "dsm_ms":  # DSM multiespectral: mismo render que el DSM
+        return "dsm"
     if t in TIPOS_VISOR:
         return t
     raise HTTPException(400, "no pude inferir el tipo de producto; pasá ?tipo=")
@@ -679,8 +847,8 @@ def _render_tile(path: Path, tipo: str, z: int, x: int, y: int) -> bytes:
 
 
 @app.get("/api/tiles/bounds")
-def tiles_bounds(archivo: str = ""):
-    f = _resolver_en_salida(archivo)
+def tiles_bounds(archivo: str = "", salida: str = ""):
+    f = _resolver_en_salida(archivo, salida)
     import rasterio
     from rasterio.warp import transform_bounds
 
@@ -693,8 +861,8 @@ def tiles_bounds(archivo: str = ""):
 
 
 @app.get("/api/tiles/stats")
-def tiles_stats(archivo: str = "", tipo: str = ""):
-    f = _resolver_en_salida(archivo)
+def tiles_stats(archivo: str = "", tipo: str = "", salida: str = ""):
+    f = _resolver_en_salida(archivo, salida)
     _rio_tiler_disponible()
     t = _tipo_visor(f, tipo)
     try:
@@ -709,10 +877,10 @@ def tiles_stats(archivo: str = "", tipo: str = ""):
 
 
 @app.get("/api/tiles/{z}/{x}/{y}.png")
-def tiles_png(z: int, x: int, y: int, archivo: str = "", tipo: str = ""):
+def tiles_png(z: int, x: int, y: int, archivo: str = "", tipo: str = "", salida: str = ""):
     if not (0 <= z <= 24):
         raise HTTPException(400, "zoom fuera de rango (0-24)")
-    f = _resolver_en_salida(archivo)
+    f = _resolver_en_salida(archivo, salida)
     _rio_tiler_disponible()
     t = _tipo_visor(f, tipo)
 

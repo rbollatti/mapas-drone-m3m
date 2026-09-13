@@ -116,6 +116,7 @@
   #panel-estado { display: none; margin-top: 16px; }
   .banner { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
   .banner.ok    { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+  .banner.ok a  { color: var(--verde-oscuro); font-weight: 600; white-space: nowrap; }
   .banner.mal   { background: #fef2f2; border: 1px solid #fecaca; color: var(--rojo); }
   .banner.gris  { background: #f3f4f6; border: 1px solid #d1d5db; color: #374151; }
 
@@ -166,6 +167,40 @@
   }
   .resultado .pie .ver-mapa { margin-top: 8px; }
 
+  /* --- solapas Generar / Visualizar --- */
+  .solapas {
+    display: flex; gap: 4px; margin-bottom: 18px;
+    border-bottom: 2px solid var(--borde);
+  }
+  .solapa {
+    display: flex; align-items: center; gap: 8px;
+    border: none; background: none; border-radius: 0;
+    padding: 9px 18px; font-size: 15.5px; font-weight: 600; color: var(--gris);
+    border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer;
+  }
+  .solapa:hover { background: none; color: #1f2937; }
+  .solapa.activa { color: var(--verde-oscuro); border-bottom-color: var(--verde); }
+  @keyframes pulso { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .punto {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--verde);
+    animation: pulso 1.6s ease-in-out infinite;
+  }
+
+  /* --- historial de mapas generados --- */
+  .cant-hist { color: var(--gris); font-size: 13.5px; }
+  .entrada-hist {
+    display: flex; align-items: baseline; gap: 10px; cursor: pointer;
+    padding: 7px 10px; border: 1px solid var(--borde); border-radius: 7px;
+    margin-bottom: 6px; background: #fafbfa;
+  }
+  .entrada-hist:hover { background: #f0f4f0; }
+  .entrada-hist.activa { border-color: var(--verde); background: #e8f5e9; }
+  .entrada-hist b { font-size: 13.5px; }
+  .entrada-hist .fecha { color: var(--gris); font-size: 12.5px; white-space: nowrap; }
+  .entrada-hist .fuente { color: var(--ambar); font-size: 12px; white-space: nowrap; }
+  .entrada-hist .cant { margin-left: auto; color: var(--gris); font-size: 12.5px; white-space: nowrap; }
+  #abrir-caja { margin-top: 14px; }
+
   /* --- visor de mapas (overlay Leaflet) --- */
   #visor {
     position: fixed; inset: 0; z-index: 2000; display: none;
@@ -214,6 +249,16 @@
     No se pudo conectar con el servidor. Verificá que siga corriendo
     (<code>python -m m3m.servidor</code>) — esta página se reconecta sola.
   </div>
+
+  <!-- ============ solapas ============ -->
+  <nav class="solapas">
+    <button id="tab-generar" class="solapa activa" type="button">Generar
+      <span id="punto-generar" class="punto" hidden></span></button>
+    <button id="tab-visualizar" class="solapa" type="button">Visualizar</button>
+  </nav>
+
+  <!-- ================================ solapa GENERAR ================== -->
+  <div id="panel-generar">
 
   <!-- ============ PASO 1: misiones ============ -->
   <section class="paso">
@@ -272,9 +317,30 @@
         <summary>Ver log del pipeline</summary>
         <pre id="log-tail"></pre>
       </details>
-      <div id="resultados"></div>
     </div>
   </section>
+
+  </div><!-- /panel-generar -->
+
+  <!-- ================================ solapa VISUALIZAR =============== -->
+  <div id="panel-visualizar" hidden>
+    <section class="paso">
+      <div class="titulo-paso"><h2>Mapas generados</h2><span class="cant-hist" id="cant-hist"></span></div>
+      <p class="ayuda">Trabajos anteriores y carpetas abiertas a mano. Hacé click en uno
+        para ver sus mapas sin volver a procesar nada.</p>
+      <div id="lista-historial"></div>
+      <div id="abrir-caja">
+        <label for="abrir-salida">Abrir carpeta de salida…</label>
+        <div class="fila">
+          <input type="text" id="abrir-salida" spellcheck="false"
+                 placeholder="Ej.: D:\odm\lote_norte_ene27 (una salida generada antes)">
+          <button id="btn-abrir" type="button">Abrir</button>
+        </div>
+        <div id="msg-historial" class="msg"></div>
+      </div>
+      <div id="resultados-historial"></div>
+    </section>
+  </div><!-- /panel-visualizar -->
 
   <footer>mapas-drone-m3m — corre 100&nbsp;% en tu computadora, nada sale de acá.</footer>
 </div>
@@ -336,10 +402,16 @@ const elPanel = $("panel-estado"), elBanner = $("banner-estado"), elBloqueProg =
 const elChips = $("chips-etapas"), elBarra = $("barra");
 const elEtiquetaEtapa = $("etiqueta-etapa"), elEtiquetaTiempo = $("etiqueta-tiempo");
 const elBtnCancelar = $("btn-cancelar"), elDetalleLog = $("detalle-log"), elLogTail = $("log-tail");
-const elResultados = $("resultados"), elAvisoServidor = $("aviso-servidor");
+const elAvisoServidor = $("aviso-servidor");
 const elVisor = $("visor"), elVisorTitulo = $("visor-titulo"), elVisorArchivo = $("visor-archivo");
 const elVisorCerrar = $("visor-cerrar"), elLeyenda = $("visor-leyenda");
 const elLeyendaIndice = $("leyenda-indice"), elLeyendaMin = $("leyenda-min"), elLeyendaMax = $("leyenda-max");
+const elCantHist = $("cant-hist"), elListaHistorial = $("lista-historial");
+const elResultadosHist = $("resultados-historial"), elMsgHistorial = $("msg-historial");
+const elAbrirSalida = $("abrir-salida"), elBtnAbrir = $("btn-abrir");
+const elPanelGenerar = $("panel-generar"), elPanelVisualizar = $("panel-visualizar");
+const elTabGenerar = $("tab-generar"), elTabVisualizar = $("tab-visualizar");
+const elPuntoGenerar = $("punto-generar");
 
 /* ================= helpers ================= */
 
@@ -370,6 +442,39 @@ async function detalleError(resp) {
     if (j && j.detail) return JSON.stringify(j.detail);
   } catch (e) {}
   try { return (await resp.text()).slice(0, 300); } catch (e) { return ""; }
+}
+
+/* ================= solapas Generar / Visualizar ================= */
+
+let solapaActiva = "generar";
+
+function mostrarSolapa(nombre) {
+  solapaActiva = nombre;
+  elPanelGenerar.hidden = nombre !== "generar";
+  elPanelVisualizar.hidden = nombre !== "visualizar";
+  elTabGenerar.classList.toggle("activa", nombre === "generar");
+  elTabVisualizar.classList.toggle("activa", nombre === "visualizar");
+  actualizarPuntoActividad();
+}
+
+// puntito en la pestaña Generar cuando hay un trabajo corriendo y el usuario
+// está mirando la otra solapa
+function actualizarPuntoActividad() {
+  const corriendo = ultimoEstado && ultimoEstado.estado === "corriendo";
+  elPuntoGenerar.hidden = !(corriendo && solapaActiva === "visualizar");
+}
+
+// Solapa inicial: se decide UNA vez, cuando ya se supo el estado del trabajo
+// y el historial. Trabajo corriendo → Generar; si no y hay historial →
+// Visualizar; si no hay nada (o no contesta el servidor) → Generar.
+let inicioEstado = null, inicioHist = null, solapaDecidida = false;
+
+function decidirSolapaInicial() {
+  if (solapaDecidida || inicioEstado === null || inicioHist === null) return;
+  solapaDecidida = true;
+  if (inicioEstado === "corriendo") mostrarSolapa("generar");
+  else if (entradasHist.length) mostrarSolapa("visualizar");
+  else mostrarSolapa("generar");
 }
 
 /* ================= paso 1: misiones ================= */
@@ -562,10 +667,16 @@ async function consultarEstado() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const t = await resp.json();
     elAvisoServidor.classList.remove("visible");
+    // un trabajo que recién terminó bien entra al historial: refrescarlo
+    if (t.estado === "hecho" && (!ultimoEstado || ultimoEstado.estado !== "hecho")) {
+      cargarHistorial();
+    }
     ultimoEstado = t;
     renderEstado(t);
+    if (inicioEstado === null) { inicioEstado = t.estado; decidirSolapaInicial(); }
   } catch (e) {
     elAvisoServidor.classList.add("visible");
+    if (inicioEstado === null) { inicioEstado = "sin-servidor"; decidirSolapaInicial(); }
   } finally {
     programarPoll(); // SIEMPRE se reprograma: se reconecta solo si el servidor vuelve
   }
@@ -579,6 +690,7 @@ function actualizarBotones() {
 
 function renderEstado(t) {
   actualizarBotones();
+  actualizarPuntoActividad();
   if (!t || t.estado === "inactivo") {
     elPanel.style.display = "none";
     return;
@@ -593,7 +705,12 @@ function renderEstado(t) {
   const duracion = inicio && fin ? formatearDuracion(fin - inicio) : "";
   if (t.estado === "hecho") {
     elBanner.className = "banner ok";
-    elBanner.textContent = "Trabajo terminado" + (duracion ? " en " + duracion : "") + ". Productos abajo.";
+    elBanner.textContent = "Trabajo terminado" + (duracion ? " en " + duracion : "") + ". ";
+    const enlace = document.createElement("a");
+    enlace.href = "#";
+    enlace.textContent = "Ver los mapas →";
+    enlace.addEventListener("click", (ev) => { ev.preventDefault(); verMapasDelUltimo(); });
+    elBanner.appendChild(enlace);
   } else if (t.estado === "error") {
     elBanner.className = "banner mal";
     elBanner.textContent = "El trabajo terminó con error: " + (t.error || "sin detalle") +
@@ -625,13 +742,16 @@ function renderEstado(t) {
   } else {
     elDetalleLog.style.display = "none";
   }
+}
 
-  // resultados
-  if (t.estado === "hecho" && Array.isArray(t.productos) && t.productos.length) {
-    renderResultados(t.productos);
-  } else {
-    elResultados.textContent = "";
-  }
+// desde el banner "hecho": salta a Visualizar con la entrada del trabajo
+// recién terminado seleccionada
+async function verMapasDelUltimo() {
+  mostrarSolapa("visualizar");
+  await cargarHistorial(); // por si el refresco del poll todavía no llegó
+  const clave = String((ultimoEstado && ultimoEstado.salida) || "").toLowerCase();
+  const e = entradasHist.find((x) => String(x.salida).toLowerCase() === clave);
+  if (e) seleccionarEntrada(e);
 }
 
 function renderChips(etapaActual) {
@@ -645,14 +765,18 @@ function renderChips(etapaActual) {
   });
 }
 
-let claveResultados = ""; // evita re-crear los <img> (y re-pedir los PNG) en cada poll
+// productos que no están en el listado de checkboxes pero pueden aparecer en
+// una salida (renombres del pipeline / carpetas abiertas a mano)
+const NOMBRE_PRODUCTO_EXTRA = { dsm_ms: "Elevación multiespectral (DSM MS)" };
 
-function renderResultados(productos) {
-  const clave = JSON.stringify(productos);
-  if (clave === claveResultados) return;
-  claveResultados = clave;
+function nombreProducto(tipo) {
+  const info = PRODUCTOS.find((x) => x.id === tipo);
+  return info ? info.nombre : (NOMBRE_PRODUCTO_EXTRA[tipo] || tipo);
+}
 
-  elResultados.textContent = "";
+// arma la grilla de tarjetas de productos (la usan el trabajo recién
+// terminado y las entradas del historial)
+function crearGrillaResultados(productos) {
   const grilla = document.createElement("div");
   grilla.className = "grilla-resultados";
 
@@ -682,8 +806,7 @@ function renderResultados(productos) {
     const pie = document.createElement("div");
     pie.className = "pie";
     const b = document.createElement("b");
-    const info = PRODUCTOS.find((x) => x.id === p.tipo);
-    b.textContent = info ? info.nombre : p.tipo;
+    b.textContent = nombreProducto(p.tipo);
     const ruta = document.createElement("div");
     ruta.className = "ruta";
     ruta.textContent = p.archivo;
@@ -699,7 +822,103 @@ function renderResultados(productos) {
     tarjeta.appendChild(pie);
     grilla.appendChild(tarjeta);
   }
-  elResultados.appendChild(grilla);
+  return grilla;
+}
+
+/* ================= historial de mapas generados ================= */
+
+let entradasHist = [];
+let salidaHistActiva = ""; // salida de la entrada seleccionada (para el highlight)
+
+function formatearFecha(iso) {
+  const d = parseFecha(iso);
+  if (!d) return "";
+  return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" })
+    + " " + d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+}
+
+async function cargarHistorial() {
+  try {
+    const resp = await fetch("/api/historial");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    entradasHist = (await resp.json()).historial || [];
+    renderHistorial();
+  } catch (e) {
+    /* sin servidor: el aviso general ya lo muestra el poll de estado */
+  } finally {
+    if (inicioHist === null) { inicioHist = true; decidirSolapaInicial(); }
+  }
+}
+
+function renderHistorial() {
+  elCantHist.textContent = entradasHist.length
+    ? "(" + entradasHist.length + ")" : "(todavía no hay)";
+  elListaHistorial.textContent = "";
+  for (const e of entradasHist) {
+    const fila = document.createElement("div");
+    fila.className = "entrada-hist" + (e.salida === salidaHistActiva ? " activa" : "");
+    const b = document.createElement("b");
+    b.textContent = e.nombre || "(sin nombre)";
+    b.title = e.salida;
+    const fecha = document.createElement("span");
+    fecha.className = "fecha";
+    fecha.textContent = formatearFecha(e.fecha_fin);
+    const cant = document.createElement("span");
+    cant.className = "cant";
+    cant.textContent = ((e.productos || []).length) + " producto(s)";
+    fila.append(b, fecha);
+    if (e.fuente === "abierta") {
+      const fuente = document.createElement("span");
+      fuente.className = "fuente";
+      fuente.textContent = "abierta a mano";
+      fila.appendChild(fuente);
+    }
+    fila.appendChild(cant);
+    fila.addEventListener("click", () => seleccionarEntrada(e));
+    elListaHistorial.appendChild(fila);
+  }
+}
+
+function seleccionarEntrada(e) {
+  salidaHistActiva = e.salida;
+  renderHistorial(); // refresca el highlight
+  elResultadosHist.textContent = "";
+  elResultadosHist.appendChild(crearGrillaResultados(e.productos || []));
+}
+
+async function abrirCarpeta() {
+  const ruta = elAbrirSalida.value.trim();
+  if (!ruta) {
+    elMsgHistorial.className = "msg error";
+    elMsgHistorial.textContent = "Escribí la carpeta de salida que querés abrir.";
+    return;
+  }
+  elBtnAbrir.disabled = true;
+  elMsgHistorial.className = "msg info";
+  elMsgHistorial.textContent = "Abriendo…";
+  try {
+    const resp = await fetch("/api/abrir", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ salida: ruta }),
+    });
+    if (!resp.ok) {
+      const det = await detalleError(resp);
+      elMsgHistorial.className = "msg error";
+      elMsgHistorial.textContent = det || ("El servidor rechazó la carpeta (" + resp.status + ").");
+      return;
+    }
+    const entrada = await resp.json();
+    elMsgHistorial.className = "msg info";
+    elMsgHistorial.textContent = entrada.productos.length + " producto(s) encontrados.";
+    await cargarHistorial();
+    seleccionarEntrada(entrada);
+  } catch (e) {
+    elMsgHistorial.className = "msg error";
+    elMsgHistorial.textContent = "No se pudo consultar al servidor.";
+  } finally {
+    elBtnAbrir.disabled = false;
+  }
 }
 
 /* ================= visor de mapas ================= */
@@ -714,7 +933,7 @@ const ESCALA_FIJA = {
 };
 // zoom máximo razonable por producto: el RGB tiene el detalle más fino,
 // los índices van al GSD multiespectral y el DSM es el más suave.
-const MAX_ZOOM = { rgb: 22, orto: 22, dsm: 20 }; // resto (índices): 21
+const MAX_ZOOM = { rgb: 22, orto: 22, dsm: 20, dsm_ms: 20 }; // resto (índices): 21
 const MIN_ZOOM = 12;
 
 let mapa = null;          // instancia Leaflet, se crea una vez y se reusa
@@ -727,13 +946,18 @@ async function abrirVisor(p) {
     alert("No se pudo cargar Leaflet (/web/leaflet/leaflet.js). Revisá que el servidor esté corriendo desde el repo.");
     return;
   }
-  // los productos viven directo en la carpeta de salida: alcanza el nombre
-  const archivo = nombreArchivo(p.archivo);
-  const tipo = p.tipo === "orto" ? "rgb" : p.tipo; // el orto multibanda se ve como RGB (bandas 1-3)
+  // los productos viven directo en su carpeta de salida: nombre + carpeta.
+  // "salida" le dice al servidor de qué entrada del historial servir.
+  const ruta = String(p.archivo);
+  const archivo = nombreArchivo(ruta);
+  const salida = ruta.slice(0, ruta.length - archivo.length - 1);
+  const extra = salida ? "&salida=" + encodeURIComponent(salida) : "";
+  // el orto multibanda se ve como RGB (bandas 1-3); el DSM MS, como el DSM
+  const tipo = p.tipo === "orto" ? "rgb" : (p.tipo === "dsm_ms" ? "dsm" : p.tipo);
 
   let limites;
   try {
-    const resp = await fetch("/api/tiles/bounds?archivo=" + encodeURIComponent(archivo));
+    const resp = await fetch("/api/tiles/bounds?archivo=" + encodeURIComponent(archivo) + extra);
     if (!resp.ok) {
       const det = await detalleError(resp);
       alert("No pude ubicar el mapa: " + (det || ("error " + resp.status)));
@@ -746,8 +970,7 @@ async function abrirVisor(p) {
     return;
   }
 
-  const info = PRODUCTOS.find((x) => x.id === p.tipo);
-  elVisorTitulo.textContent = info ? info.nombre : p.tipo;
+  elVisorTitulo.textContent = nombreProducto(p.tipo);
   elVisorArchivo.textContent = archivo;
   elVisor.classList.add("abierto");
 
@@ -761,7 +984,7 @@ async function abrirVisor(p) {
   if (capaProducto) { mapa.removeLayer(capaProducto); capaProducto = null; }
   capaProducto = L.tileLayer(
     "/api/tiles/{z}/{x}/{y}.png?archivo=" + encodeURIComponent(archivo)
-      + "&tipo=" + encodeURIComponent(tipo),
+      + "&tipo=" + encodeURIComponent(tipo) + extra,
     { tileSize: 256, minZoom: MIN_ZOOM, maxNativeZoom: nativo, maxZoom: maxZoom, bounds: limites, noWrap: true });
   capaProducto.addTo(mapa);
   mapa.invalidateSize(false);                // el contenedor recién se hizo visible
@@ -770,7 +993,7 @@ async function abrirVisor(p) {
 
   const escala = ESCALA_FIJA[p.tipo];        // leyenda solo para índices
   if (escala) {
-    elLeyendaIndice.textContent = info ? info.nombre : p.tipo;
+    elLeyendaIndice.textContent = nombreProducto(p.tipo);
     elLeyendaMin.textContent = escala[0].toFixed(2);
     elLeyendaMax.textContent = escala[1].toFixed(2);
     elLeyenda.classList.add("visible");
@@ -798,8 +1021,13 @@ elVisorCerrar.addEventListener("click", cerrarVisor);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && elVisor.classList.contains("abierto")) cerrarVisor();
 });
+elBtnAbrir.addEventListener("click", abrirCarpeta);
+elAbrirSalida.addEventListener("keydown", (e) => { if (e.key === "Enter") abrirCarpeta(); });
+elTabGenerar.addEventListener("click", () => mostrarSolapa("generar"));
+elTabVisualizar.addEventListener("click", () => mostrarSolapa("visualizar"));
 
 consultarEstado(); // restaura un trabajo en curso si el servidor ya tenía uno
+cargarHistorial(); // y la lista de mapas generados antes
 </script>
 </body>
 </html>
