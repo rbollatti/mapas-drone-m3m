@@ -20,10 +20,17 @@ Encadena todas las piezas del paquete en un solo comando:
 4. ``productos``   — índices NDVI/GNDVI/NDRE/LCI desde el orto multibanda
    des-escalando con k_bandas.json, recorte de borde de 15 m, suavizado
    gaussiano opcional; DSM y orto multibanda a COG; nube LAZ copiada.
-5. ``rgb``         — segundo run ODM con las ``*_D.JPG`` (solo si se pidió).
-6. ``movida``      — productos a ``<salida>/<nombre>_<producto>.*`` (el
+5. ``rgb``         — segundo run ODM con las ``*_D.JPG`` (solo si se pidió),
+   ahora con ``--dsm``: su DSM alimenta la etapa de control.
+6. ``control``     — compara el DSM multiespectral contra el del bloque RGB
+   (bloques independientes): globos de desacuerdo >5 cm y >0,5 ha delatan
+   ondulaciones de empalme entre misiones que NDRE y textura no muestran.
+   Si aparecen: advertencia en ``resumen.json`` (``control_bloques``) y se
+   genera ``<nombre>_dsm_fusionado.tif`` (promedio de ambos bloques) — usar
+   ESE para alturas de cultivo.
+7. ``movida``      — productos a ``<salida>/<nombre>_<producto>.*`` (el
    ``<nombre>`` del proyecto es el basename de ``--salida``) + ``resumen.json``.
-7. ``limpieza``    — borra los working dirs del proyecto.
+8. ``limpieza``    — borra los working dirs del proyecto.
 
 Protocolo de progreso (parseable por cualquier wrapper que lance esto por
 subprocess): imprime en stdout líneas ``##ETAPA## <slug> <pct entero 0-100>``
@@ -33,7 +40,7 @@ a la etapa.
 Uso
 ---
     python -m m3m.pipeline \\
-        --misiones "D:\\Drone\\Vuelo 08012027\\DJI_..._031" "D:\\...\\_032" \\
+        --misiones "D:\\Drone\\Vuelo 08012027\\DJI_..._001" "D:\\...\\_002" \\
         --productos ndvi,ndre,dsm,orto --salida "D:\\odm\\vuelo_0801" \\
         [--workdir C:\\odm_work] [--resolucion-cm 7.4] [--suavizado-m 0] \\
         [--gpu] [--boundary lote.geojson] [--contenedor m3m_job_x] \\
@@ -246,10 +253,99 @@ def args_odm_ms(resolucion_cm: float, con_boundary: bool, max_concurrency: int) 
 
 
 def args_odm_rgb(con_boundary: bool) -> list[str]:
-    """Run RGB con flags default de ODM: solo boundary + resolución 3 cm."""
+    """Run RGB con flags default de ODM: boundary + resolución 3 cm + DSM.
+
+    El DSM del bloque RGB casi no agrega tiempo (minutos) y habilita la etapa
+    ``control``: es un bloque fotogramétrico INDEPENDIENTE del multiespectral,
+    y el desacuerdo entre ambos delata ondulaciones de empalme entre misiones
+    que de otro modo pasan en silencio (visto en un vuelo real multi-misión:
+    globo de −10 cm en una costura, invisible en NDRE y textura).
+    """
     a = ["--boundary", "/datasets/code/boundary.geojson"] if con_boundary else ["--auto-boundary"]
-    a += ["--orthophoto-resolution", "3"]
+    a += ["--orthophoto-resolution", "3", "--dsm", "--dem-resolution", "20"]
     return a
+
+
+def control_bloques(dsm_ms: Path, dsm_rgb: Path, salida_fusion: Path) -> dict:
+    """Compara el DSM multiespectral contra el del bloque RGB (independiente).
+
+    Globos de desacuerdo >5 cm y >0,5 ha = ondulación de bloque en uno de los
+    dos. Si aparecen, escribe además un DSM FUSIONADO (promedio de ambos, RGB
+    nivelado al MS que está anclado) donde las ondulaciones propias de cada
+    bloque se promedian — usar ese para alturas de cultivo.
+
+    Returns
+    -------
+    dict con ``veredicto`` ("ok" | "revisar"), ``blobs`` y ``dsm_fusionado``.
+    """
+    import numpy as np
+    import rasterio
+    from affine import Affine
+    from rasterio.warp import Resampling, reproject
+    from scipy import ndimage
+
+    res_m = 1.0
+    with rasterio.open(dsm_ms) as ds:
+        fac = max(1, round(res_m / ds.res[0]))
+        oh, ow = ds.height // fac, ds.width // fac
+        ms = ds.read(1, out_shape=(oh, ow)).astype("float32")
+        if ds.nodata is not None:
+            ms[ms == ds.nodata] = np.nan
+        t_ms = ds.transform * Affine.scale(ds.width / ow, ds.height / oh)
+        crs = ds.crs
+        perfil = ds.profile
+    with rasterio.open(dsm_rgb) as ds:
+        rgb_r = ds.read(1).astype("float32")
+        if ds.nodata is not None:
+            rgb_r[rgb_r == ds.nodata] = np.nan
+        rgb = np.full_like(ms, np.nan)
+        reproject(rgb_r, rgb, src_transform=ds.transform, src_crs=ds.crs,
+                  dst_transform=t_ms, dst_crs=crs, resampling=Resampling.bilinear,
+                  src_nodata=np.nan, dst_nodata=np.nan)
+
+    ok = np.isfinite(ms) & np.isfinite(rgb)
+    if ok.sum() < 10000:
+        return {"veredicto": "sin_datos", "blobs": [], "dsm_fusionado": None}
+    d = ms - rgb
+    med = float(np.nanmedian(d[ok]))
+    resid = np.where(ok, d - med, np.nan)
+    # escala de bloque (~15 m): suavizado que ignora NaN
+    peso = ndimage.uniform_filter(ok.astype("float32"), size=15)
+    suma = ndimage.uniform_filter(np.nan_to_num(resid), size=15)
+    resid_s = np.where(peso > 0.3, suma / np.maximum(peso, 1e-6), np.nan)
+
+    mal = np.isfinite(resid_s) & (np.abs(resid_s) > 0.05)
+    mal = ndimage.binary_opening(mal, iterations=3)
+    lab, n = ndimage.label(mal)
+    blobs = []
+    for i in range(1, n + 1):
+        m = lab == i
+        ha = float(m.sum() * res_m * res_m / 1e4)
+        if ha < 0.5:
+            continue
+        cy, cx = ndimage.center_of_mass(m)
+        blobs.append({
+            "ha": round(ha, 1),
+            "dz_cm": round(float(np.nanmedian(resid_s[m])) * 100, 1),
+            "centro_utm": [round(t_ms.c + t_ms.a * cx, 0), round(t_ms.f + t_ms.e * cy, 0)],
+        })
+    blobs.sort(key=lambda b: -b["ha"])
+
+    fusion_rel = None
+    if blobs:
+        for b in blobs:
+            print(f"CONTROL: desacuerdo entre bloques de {b['dz_cm']:+.0f} cm en "
+                  f"{b['ha']} ha (UTM {b['centro_utm'][0]:.0f},{b['centro_utm'][1]:.0f})", flush=True)
+        fusion = np.nanmean(np.dstack([ms, rgb + med]), axis=2).astype("float32")
+        perfil.update(dtype="float32", nodata=np.nan, compress="deflate",
+                      width=ow, height=oh, transform=t_ms, count=1, BIGTIFF="IF_SAFER")
+        for k in ("blockxsize", "blockysize", "tiled", "interleave", "photometric"):
+            perfil.pop(k, None)
+        with rasterio.open(salida_fusion, "w", **perfil) as o:
+            o.write(fusion, 1)
+        fusion_rel = salida_fusion.name
+    return {"veredicto": "revisar" if blobs else "ok", "blobs": blobs,
+            "dsm_fusionado": fusion_rel}
 
 
 def correr_odm(proy: Path, contenedor: str, gpu: bool, flags: list[str], slug: str) -> None:
@@ -514,6 +610,22 @@ def main() -> None:
             etapa("rgb", 100)
             tiempos["rgb"] = round(time.monotonic() - t, 1)
 
+    # --- control de bloques (MS vs RGB: ondulaciones de empalme) --------------
+    control: dict | None = None
+    dsm_ms = next((f for tipo, f in generados if tipo == "dsm"), None)
+    dsm_rgb = proy_rgb / "odm_dem" / "dsm.tif"
+    if hay_rgb and dsm_ms is not None and dsm_rgb.exists():
+        t = time.monotonic()
+        etapa("control", 0)
+        fus = stage_dir / f"{nombre}_dsm_fusionado.tif"
+        control = control_bloques(dsm_ms, dsm_rgb, fus)
+        if control.get("dsm_fusionado"):
+            generados.append(("dsm_fusionado", fus))
+        print(f"control de bloques: {control['veredicto']} "
+              f"({len(control['blobs'])} zonas de desacuerdo)", flush=True)
+        etapa("control", 100)
+        tiempos["control"] = round(time.monotonic() - t, 1)
+
     # --- movida --------------------------------------------------------------
     t = time.monotonic()
     etapa("movida", 0)
@@ -530,6 +642,8 @@ def main() -> None:
     # limpieza no entra en tiempos_por_etapa: el resumen se escribe antes (contrato de la etapa)
     resumen = {"productos": lista, "tiempos_por_etapa": tiempos, "fotos": fotos,
                "cuarentena": cuarentena}
+    if control is not None:
+        resumen["control_bloques"] = control
     (a.salida / "resumen.json").write_text(
         json.dumps(resumen, indent=2, ensure_ascii=False), encoding="utf-8")
     etapa("movida", 100)

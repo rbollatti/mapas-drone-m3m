@@ -144,7 +144,7 @@ serves as a format reference.
 
 1. Ask the user:
    - Where are the flight's **mission folders**? (the drone creates them on
-     the card, like `DJI_202601011200_031`; a long flight spans several).
+     the card, like `DJI_202601011200_001`; a long flight spans several).
    - Which **products** do they want? (`ndvi,gndvi,ndre,lci,orto,dsm,nube,rgb`
      — for a first flight suggest `ndvi,ndre,orto,dsm`).
    - **Output folder?** (its basename becomes the project name and the prefix
@@ -157,7 +157,7 @@ serves as a format reference.
    ```
 
 3. The pipeline prints `##ETAPA## <slug> <pct>` lines (stages: escaneo,
-   calibracion, odm, productos, rgb, movida, limpieza). Keep telling the user
+   calibracion, odm, productos, rgb, control, movida, limpieza). Keep telling the user
    which stage it is in and roughly how much is left. The `odm` stage is the
    long one (hours on large flights); the rest take minutes.
 4. When it finishes, show them the `resumen.json` in the output folder and

@@ -257,13 +257,14 @@ const PRODUCTOS = [
 ];
 const PRODUCTOS_DEFAULT = ["ndvi", "ndre", "orto", "dsm"];
 
-const ETAPAS = ["escaneo", "calibracion", "odm", "productos", "rgb", "movida", "limpieza"];
+const ETAPAS = ["escaneo", "calibracion", "odm", "productos", "rgb", "control", "movida", "limpieza"];
 const NOMBRE_ETAPA = {
   escaneo:     "Escaneo de fotos (EXIF)",
   calibracion: "Calibración radiométrica",
   odm:         "Fotogrametría (OpenDroneMap) — la etapa larga",
   productos:   "Generación de índices y productos",
   rgb:         "Ortomosaico RGB",
+  control:     "Control de bloques",
   movida:      "Copia a la carpeta de salida",
   limpieza:    "Limpieza de temporales",
 };
