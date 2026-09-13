@@ -10,3 +10,6 @@ cameras_fabrica.json
 
 # Salidas locales
 /salidas/
+
+# Estado/log del último trabajo de la interfaz web (python -m m3m.servidor)
+/trabajos/

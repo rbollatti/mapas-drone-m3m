@@ -10,5 +10,9 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "R. Bollatti" }]
 
+[project.optional-dependencies]
+# interfaz web local (python -m m3m.servidor); el pipeline CLI no la necesita
+ui = ["fastapi>=0.110", "uvicorn>=0.27"]
+
 [tool.setuptools]
 packages = ["m3m"]
