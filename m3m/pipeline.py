@@ -21,13 +21,13 @@ Encadena todas las piezas del paquete en un solo comando:
    des-escalando con k_bandas.json, recorte de borde de 15 m, suavizado
    gaussiano opcional; DSM y orto multibanda a COG; nube LAZ copiada.
 5. ``rgb``         — segundo run ODM con las ``*_D.JPG`` (solo si se pidió),
-   ahora con ``--dsm``: su DSM alimenta la etapa de control.
-6. ``control``     — compara el DSM multiespectral contra el del bloque RGB
-   (bloques independientes): globos de desacuerdo >5 cm y >0,5 ha delatan
-   ondulaciones de empalme entre misiones que NDRE y textura no muestran.
-   Si aparecen: advertencia en ``resumen.json`` (``control_bloques``) y se
-   genera ``<nombre>_dsm_fusionado.tif`` (promedio de ambos bloques) — usar
-   ESE para alturas de cultivo.
+   con geometría CURADA (lente de fábrica RGB extraída del vuelo + RTK 0,05
+   + DSM): validado r=0,998 y p50 4 cm vs el software comercial de referencia.
+6. ``control``     — con ``rgb`` + ``dsm``, el DSM OFICIAL (``_dsm``) pasa a
+   ser el del bloque RGB (no sufre el hundimiento del multiespectral en
+   canopeo abierto); el multiespectral queda como ``_dsm_ms``. Además compara
+   ambos bloques y advierte en ``resumen.json`` (``control_bloques``) dónde
+   el ``_dsm_ms`` no es confiable para alturas.
 7. ``movida``      — productos a ``<salida>/<nombre>_<producto>.*`` (el
    ``<nombre>`` del proyecto es el basename de ``--salida``) + ``resumen.json``.
 8. ``limpieza``    — borra los working dirs del proyecto.
@@ -252,31 +252,67 @@ def args_odm_ms(resolucion_cm: float, con_boundary: bool, max_concurrency: int) 
     return a
 
 
-def args_odm_rgb(con_boundary: bool) -> list[str]:
-    """Run RGB con flags default de ODM: boundary + resolución 3 cm + DSM.
+def args_odm_rgb(con_boundary: bool, max_concurrency: int) -> list[str]:
+    """Run RGB con geometría CURADA: lente de fábrica RGB + RTK apretado + DSM.
 
-    El DSM del bloque RGB casi no agrega tiempo (minutos) y habilita la etapa
-    ``control``: es un bloque fotogramétrico INDEPENDIENTE del multiespectral,
-    y el desacuerdo entre ambos delata ondulaciones de empalme entre misiones
-    que de otro modo pasan en silencio (visto en un vuelo real multi-misión:
-    globo de −10 cm en una costura, invisible en NDRE y textura).
+    Validado contra el software comercial de referencia (mismo vuelo): con
+    estos flags el DSM del bloque RGB da r=0,998 y |dif| p50 4 cm, con MAD
+    5 cm contra la franja RTK — igual que la referencia comercial y mejor que
+    el multiespectral (MAD 8, y sin su hundimiento en canopeo abierto). Por
+    eso, cuando el trabajo pide ``rgb`` + ``dsm``, el DSM OFICIAL del vuelo
+    es el del bloque RGB (el multiespectral queda como ``_dsm_ms`` secundario).
+    La calibración de fábrica de la lente RGB (distinta de la multiespectral,
+    k1 −0,11) se extrae del XMP de la primera JPG en :func:`cameras_rgb_de`.
     """
     a = ["--boundary", "/datasets/code/boundary.geojson"] if con_boundary else ["--auto-boundary"]
-    a += ["--orthophoto-resolution", "3", "--dsm", "--dem-resolution", "20"]
+    a += [
+        "--orthophoto-resolution", "3", "--dsm", "--dem-resolution", "20",
+        "--camera-lens", "brown", "--cameras", "/datasets/code/cameras_fabrica.json",
+        "--gps-accuracy", "0.05", "--pc-filter", "2",
+        "--skip-report", "--max-concurrency", str(max_concurrency),
+    ]
     return a
 
 
-def control_bloques(dsm_ms: Path, dsm_rgb: Path, salida_fusion: Path) -> dict:
+def cameras_rgb_de(jpg: Path, salida: Path) -> None:
+    """Extrae la calibración de fábrica de la lente RGB (XMP ``DewarpData``)
+    de una ``*_D.JPG`` y escribe el cameras.json de ODM (modelo brown).
+
+    Es POR UNIDAD de drone, igual que la multiespectral — por eso se genera
+    del propio vuelo en cada corrida en vez de usar una plantilla.
+    """
+    raw = jpg.read_bytes()[:65536]
+    m = re.search(rb'drone-dji:DewarpData="\s*([^"]+)"', raw)
+    if not m:
+        raise RuntimeError(f"la JPG {jpg.name} no trae DewarpData en el XMP")
+    nums = m.group(1).decode().split(";")[1]
+    fx, fy, cx, cy, k1, k2, p1, p2, k3 = (float(x) for x in nums.split(","))
+    mw = re.search(rb'exif:PixelXDimension="(\d+)"', raw)
+    mh = re.search(rb'exif:PixelYDimension="(\d+)"', raw)
+    w = float(mw.group(1)) if mw else 5280.0
+    h = float(mh.group(1)) if mh else 3956.0
+    cam = {
+        f"dji m3m {w:.0f} {h:.0f} brown {fx / w:.4f}": {
+            "projection_type": "brown", "width": int(w), "height": int(h),
+            "focal_x": fx / w, "focal_y": fy / w, "c_x": cx / w, "c_y": cy / w,
+            "k1": k1, "k2": k2, "p1": p1, "p2": p2, "k3": k3,
+        }
+    }
+    salida.write_text(json.dumps(cam, indent=2), encoding="utf-8")
+
+
+def control_bloques(dsm_ms: Path, dsm_rgb: Path) -> dict:
     """Compara el DSM multiespectral contra el del bloque RGB (independiente).
 
-    Globos de desacuerdo >5 cm y >0,5 ha = ondulación de bloque en uno de los
-    dos. Si aparecen, escribe además un DSM FUSIONADO (promedio de ambos, RGB
-    nivelado al MS que está anclado) donde las ondulaciones propias de cada
-    bloque se promedian — usar ese para alturas de cultivo.
+    Globos de desacuerdo >5 cm y >0,5 ha = zonas donde el multiespectral se
+    hunde en el canopeo (efecto de sensor, no de configuración — investigado
+    con tests controlados: matching, lente y RTK exonerados). El DSM oficial
+    ya es el del bloque RGB; esto queda como advertencia de dónde NO usar el
+    ``_dsm_ms``.
 
     Returns
     -------
-    dict con ``veredicto`` ("ok" | "revisar"), ``blobs`` y ``dsm_fusionado``.
+    dict con ``veredicto`` ("ok" | "revisar") y ``blobs``.
     """
     import numpy as np
     import rasterio
@@ -293,7 +329,6 @@ def control_bloques(dsm_ms: Path, dsm_rgb: Path, salida_fusion: Path) -> dict:
             ms[ms == ds.nodata] = np.nan
         t_ms = ds.transform * Affine.scale(ds.width / ow, ds.height / oh)
         crs = ds.crs
-        perfil = ds.profile
     with rasterio.open(dsm_rgb) as ds:
         rgb_r = ds.read(1).astype("float32")
         if ds.nodata is not None:
@@ -305,7 +340,7 @@ def control_bloques(dsm_ms: Path, dsm_rgb: Path, salida_fusion: Path) -> dict:
 
     ok = np.isfinite(ms) & np.isfinite(rgb)
     if ok.sum() < 10000:
-        return {"veredicto": "sin_datos", "blobs": [], "dsm_fusionado": None}
+        return {"veredicto": "sin_datos", "blobs": []}
     d = ms - rgb
     med = float(np.nanmedian(d[ok]))
     resid = np.where(ok, d - med, np.nan)
@@ -331,21 +366,11 @@ def control_bloques(dsm_ms: Path, dsm_rgb: Path, salida_fusion: Path) -> dict:
         })
     blobs.sort(key=lambda b: -b["ha"])
 
-    fusion_rel = None
-    if blobs:
-        for b in blobs:
-            print(f"CONTROL: desacuerdo entre bloques de {b['dz_cm']:+.0f} cm en "
-                  f"{b['ha']} ha (UTM {b['centro_utm'][0]:.0f},{b['centro_utm'][1]:.0f})", flush=True)
-        fusion = np.nanmean(np.dstack([ms, rgb + med]), axis=2).astype("float32")
-        perfil.update(dtype="float32", nodata=np.nan, compress="deflate",
-                      width=ow, height=oh, transform=t_ms, count=1, BIGTIFF="IF_SAFER")
-        for k in ("blockxsize", "blockysize", "tiled", "interleave", "photometric"):
-            perfil.pop(k, None)
-        with rasterio.open(salida_fusion, "w", **perfil) as o:
-            o.write(fusion, 1)
-        fusion_rel = salida_fusion.name
-    return {"veredicto": "revisar" if blobs else "ok", "blobs": blobs,
-            "dsm_fusionado": fusion_rel}
+    for b in blobs:
+        print(f"CONTROL: el DSM multiespectral se hunde {b['dz_cm']:+.0f} cm en "
+              f"{b['ha']} ha (UTM {b['centro_utm'][0]:.0f},{b['centro_utm'][1]:.0f}) — "
+              "usar el _dsm oficial (bloque RGB) para alturas ahí", flush=True)
+    return {"veredicto": "revisar" if blobs else "ok", "blobs": blobs}
 
 
 def correr_odm(proy: Path, contenedor: str, gpu: bool, flags: list[str], slug: str) -> None:
@@ -602,7 +627,9 @@ def main() -> None:
                 shutil.copy2(f, img_rgb / f.name)
             if a.boundary is not None:
                 shutil.copy2(a.boundary, proy_rgb / "boundary.geojson")
-            correr_odm(proy_rgb, contenedor, a.gpu, args_odm_rgb(a.boundary is not None), "rgb")
+            cameras_rgb_de(jpgs[0], proy_rgb / "cameras_fabrica.json")
+            correr_odm(proy_rgb, contenedor, a.gpu,
+                       args_odm_rgb(a.boundary is not None, a.max_concurrency), "rgb")
             f = stage_dir / f"{nombre}_rgb.tif"
             a_cog(proy_rgb / "odm_orthophoto" / "odm_orthophoto.tif", f)
             generados.append(("rgb", f))
@@ -610,19 +637,28 @@ def main() -> None:
             etapa("rgb", 100)
             tiempos["rgb"] = round(time.monotonic() - t, 1)
 
-    # --- control de bloques (MS vs RGB: ondulaciones de empalme) --------------
+    # --- control de bloques + DSM oficial = bloque RGB ------------------------
+    # El DSM del bloque RGB (geometría curada) es equivalente al del software
+    # comercial de referencia y no sufre el hundimiento del multiespectral en
+    # canopeo abierto: cuando hay rgb, pasa a ser el _dsm oficial y el MS
+    # queda como _dsm_ms.
     control: dict | None = None
     dsm_ms = next((f for tipo, f in generados if tipo == "dsm"), None)
     dsm_rgb = proy_rgb / "odm_dem" / "dsm.tif"
     if hay_rgb and dsm_ms is not None and dsm_rgb.exists():
         t = time.monotonic()
         etapa("control", 0)
-        fus = stage_dir / f"{nombre}_dsm_fusionado.tif"
-        control = control_bloques(dsm_ms, dsm_rgb, fus)
-        if control.get("dsm_fusionado"):
-            generados.append(("dsm_fusionado", fus))
+        dsm_ms_final = stage_dir / f"{nombre}_dsm_ms.tif"
+        dsm_ms.rename(dsm_ms_final)
+        dsm_oficial = stage_dir / f"{nombre}_dsm.tif"
+        a_cog(dsm_rgb, dsm_oficial)
+        generados[:] = [("dsm_ms", dsm_ms_final) if tipo == "dsm" else (tipo, f)
+                        for tipo, f in generados]
+        generados.append(("dsm", dsm_oficial))
+        control = control_bloques(dsm_ms_final, dsm_oficial)
         print(f"control de bloques: {control['veredicto']} "
-              f"({len(control['blobs'])} zonas de desacuerdo)", flush=True)
+              f"({len(control['blobs'])} zonas de desacuerdo MS vs RGB; "
+              f"el _dsm oficial es el del bloque RGB)", flush=True)
         etapa("control", 100)
         tiempos["control"] = round(time.monotonic() - t, 1)
 
