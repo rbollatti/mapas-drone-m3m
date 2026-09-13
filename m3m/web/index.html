@@ -751,7 +751,8 @@ async function abrirVisor(p) {
   elVisorArchivo.textContent = archivo;
   elVisor.classList.add("abierto");
 
-  const maxZoom = MAX_ZOOM[p.tipo] || 21;
+  const nativo = MAX_ZOOM[p.tipo] || 21;
+  const maxZoom = nativo + 2;  // sobremuestreo al fondo, estilo Google Maps
   if (!mapa) {
     // sin mapa base de internet: el producto ES el mapa, el fondo queda gris
     mapa = L.map("mapa", { minZoom: MIN_ZOOM, maxZoom: maxZoom });
@@ -761,7 +762,7 @@ async function abrirVisor(p) {
   capaProducto = L.tileLayer(
     "/api/tiles/{z}/{x}/{y}.png?archivo=" + encodeURIComponent(archivo)
       + "&tipo=" + encodeURIComponent(tipo),
-    { tileSize: 256, minZoom: MIN_ZOOM, maxZoom: maxZoom, bounds: limites, noWrap: true });
+    { tileSize: 256, minZoom: MIN_ZOOM, maxNativeZoom: nativo, maxZoom: maxZoom, bounds: limites, noWrap: true });
   capaProducto.addTo(mapa);
   mapa.invalidateSize(false);                // el contenedor recién se hizo visible
   // sin animación: si no, el encuadre puede quedar a medio camino al reabrir
