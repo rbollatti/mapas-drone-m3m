@@ -1158,7 +1158,7 @@ function programarRecargaTiles() {
 }
 
 // pointer events (mouse y touch): el track entero agarra la manija más
-// cercana al click, como el EscalaSlider de Surco
+// cercana al click — blanco de agarre grande, no solo los 12 px de la manija
 function agarrarManija(e) {
   const dom = dominioSlider();
   if (!dom || !rangoVigente) return;  // rgb no tiene leyenda; DSM sin stats
