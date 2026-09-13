@@ -205,10 +205,16 @@ offer them the local web interface as an alternative to the CLI of step 6:
    experimental GPU switch. It shows per-stage progress, the pipeline log, a
    cancel button, and PNG previews of the products when the job finishes.
    One job at a time.
-4. To demo the interface without real data or Docker, set the environment
+4. Each finished product card also has a "Ver mapa" button that opens an
+   interactive Leaflet viewer (pan/zoom, no basemap, fully offline — Leaflet
+   is bundled in `m3m/web/leaflet/`). Tiles are rendered on the fly from the
+   GeoTIFF by the server using rio-tiler (part of the `[ui]` extra): indices
+   with a fixed RdYlGn scale, DSM with a terrain palette, RGB direct.
+5. To demo the interface without real data or Docker, set the environment
    variable `M3M_SIMULACRO=1` before starting the server: a ~20-second
-   simulated pipeline goes through every stage and writes small synthetic
-   GeoTIFFs.
+   simulated pipeline goes through every stage and writes synthetic
+   1000x1000 px GeoTIFFs (georeferenced, so the map viewer works on them
+   too).
 
 ---
 

@@ -66,7 +66,14 @@ tildá los productos que querés y apretá "Generar". El progreso por etapa, el
 log y las vistas previas de los productos se ven en la misma página. Todo
 corre en tu máquina — no se sube nada. Para probarla sin drone ni Docker,
 arrancá el servidor con la variable de entorno `M3M_SIMULACRO=1`: un pipeline
-de demo de ~20 segundos genera mapas sintéticos chiquitos.
+de demo de ~20 segundos genera mapas sintéticos.
+
+Cada producto terminado tiene además un **botón "Ver mapa"**: un visor
+interactivo (pan/zoom) renderizado al vuelo desde el GeoTIFF, en la misma
+página. Los índices usan escala de colores fija (NDVI 0,15-0,90, GNDVI
+0,15-0,80, NDRE 0,05-0,45, LCI 0,05-0,55), así dos vuelos del mismo lote se
+comparan directo; el DSM va con paleta de terreno. Sin mapa base y sin
+internet — el visor funciona completamente offline.
 
 ## Licencia y agradecimientos
 
@@ -77,3 +84,7 @@ La fotogrametría la hace **[OpenDroneMap](https://www.opendronemap.org/)**
 (licencia AGPL), que este pipeline ejecuta como programa externo via Docker.
 Sin el enorme trabajo de la comunidad de ODM, nada de esto sería posible —
 gracias.
+
+El visor de mapas de la interfaz local usa **[Leaflet](https://leafletjs.com/)**
+1.9.4 (licencia BSD-2-Clause, (c) Volodymyr Agafonkin y colaboradores),
+incluido en `m3m/web/leaflet/` para que la página funcione offline.

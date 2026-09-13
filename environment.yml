@@ -17,3 +17,5 @@ dependencies:
       - exifread>=3.0   # escaneo EXIF pre-vuelo (detecta MakerNote corrupto)
       - fastapi>=0.110  # interfaz web local (python -m m3m.servidor)
       - uvicorn>=0.27   # servidor ASGI de la interfaz web
+      # - rio-tiler>=6  # visor de mapas de la interfaz web (opcional; también
+      #                 # entra con: pip install -e .[ui])

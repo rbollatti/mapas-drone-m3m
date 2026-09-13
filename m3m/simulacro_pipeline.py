@@ -4,8 +4,10 @@ Se activa arrancando el servidor con la variable de entorno ``M3M_SIMULACRO=1``
 (el servidor corre este módulo en lugar de ``m3m.pipeline``). Acepta los
 mismos flags que el pipeline real, emite el mismo protocolo de progreso
 ``##ETAPA## <slug> <pct>`` por stdout, tarda ~20 segundos y escribe en
-``--salida`` GeoTIFFs sintéticos chicos (200x200, EPSG:32720) con rasterio,
-más un ``resumen.json`` con el mismo contrato que el pipeline real.
+``--salida`` GeoTIFFs sintéticos (1000x1000 px, 1 m/px, EPSG:32720 — tamaño
+suficiente para que el visor de mapas de la interfaz web tenga varios niveles
+de zoom) con rasterio, más un ``resumen.json`` con el mismo contrato que el
+pipeline real.
 
 Uso directo (mismos flags que m3m.pipeline)::
 
@@ -21,11 +23,11 @@ from pathlib import Path
 
 from .pipeline import INDICES, PRODUCTOS_VALIDOS, etapa
 
-LADO = 200  # px de los rasters sintéticos
+LADO = 1000  # px de los rasters sintéticos (1000x1000 = lote de 1 km de lado)
 RES_M = 1.0  # m/px
 ORIGEN = (439_000.0, 6_377_000.0)  # UTM 20S (EPSG:32720), zona Las Rosas-ish
 CRS = "EPSG:32720"
-BORDE_PX = 12  # anillo NaN alrededor, simula el recorte de borde del real
+BORDE_PX = 60  # anillo NaN alrededor, simula el recorte de borde del real
 
 
 def _perfil(dtype: str, bandas: int, nodata=None) -> dict:
@@ -83,6 +85,7 @@ def _escribir_rgb(archivo: Path, semilla: int) -> None:
     """Orto RGB sintético uint8 de 4 bandas (RGB + alpha), verde con textura."""
     import numpy as np
     import rasterio
+    from rasterio.enums import ColorInterp
 
     rng = np.random.default_rng(semilla)
     yy, xx = np.mgrid[0:LADO, 0:LADO] / LADO
@@ -92,6 +95,9 @@ def _escribir_rgb(archivo: Path, semilla: int) -> None:
     valida = _mascara_valida()
     alpha = np.where(valida, 255, 0).astype(np.uint8)
     with rasterio.open(archivo, "w", **_perfil("uint8", 4)) as ds:
+        # colorinterp explícito: así el visor (rio-tiler) usa la banda 4 como alpha
+        ds.colorinterp = (ColorInterp.red, ColorInterp.green,
+                          ColorInterp.blue, ColorInterp.alpha)
         for i, canal in enumerate((rojo, verde, azul), start=1):
             banda = np.clip(canal, 0, 255).astype(np.uint8)
             banda[~valida] = 0

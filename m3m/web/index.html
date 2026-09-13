@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mapas drone M3M</title>
+<!-- Leaflet 1.9.4 (licencia BSD-2-Clause, (c) Volodymyr Agafonkin y colaboradores;
+     ver m3m/web/leaflet/LICENSE) vendoreado en /web/leaflet/ para que la página
+     funcione offline, sin CDN. -->
+<link rel="stylesheet" href="/web/leaflet/leaflet.css">
 <style>
   :root {
     --verde: #2e7d32;
@@ -160,6 +164,41 @@
     font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--gris);
     word-break: break-all; margin-top: 2px;
   }
+  .resultado .pie .ver-mapa { margin-top: 8px; }
+
+  /* --- visor de mapas (overlay Leaflet) --- */
+  #visor {
+    position: fixed; inset: 0; z-index: 2000; display: none;
+    flex-direction: column; background: var(--fondo);
+  }
+  #visor.abierto { display: flex; }
+  .visor-cabecera {
+    display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    background: var(--tarjeta); border-bottom: 1px solid var(--borde);
+  }
+  .visor-cabecera b { font-size: 15.5px; white-space: nowrap; }
+  .visor-cabecera .archivo {
+    font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+    color: var(--gris); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #visor-cerrar { margin-left: auto; flex: none; }
+  /* fondo gris neutro: no hay mapa base de internet, el producto ES el mapa */
+  #mapa { flex: 1; background: #babfba; }
+  #visor-leyenda {
+    position: absolute; left: 12px; bottom: 20px; z-index: 2100;
+    display: none; align-items: center; gap: 8px;
+    background: rgba(255, 255, 255, .93); border: 1px solid var(--borde);
+    border-radius: 8px; padding: 7px 12px; font-size: 12.5px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .15);
+  }
+  #visor-leyenda.visible { display: flex; }
+  #visor-leyenda b { font-size: 12.5px; }
+  .leyenda-barra {
+    width: 150px; height: 12px; border-radius: 3px; border: 1px solid var(--borde);
+    /* RdYlGn de ColorBrewer, mismas 11 clases que usa el servidor */
+    background: linear-gradient(to right, #a50026, #d73027, #f46d43, #fdae61,
+      #fee08b, #ffffbf, #d9ef8b, #a6d96a, #66bd63, #1a9850, #006837);
+  }
   footer { color: var(--gris); font-size: 12.5px; margin-top: 24px; text-align: center; }
 </style>
 </head>
@@ -240,6 +279,23 @@
   <footer>mapas-drone-m3m — corre 100&nbsp;% en tu computadora, nada sale de acá.</footer>
 </div>
 
+<!-- ============ visor de mapas (overlay) ============ -->
+<div id="visor">
+  <div class="visor-cabecera">
+    <b id="visor-titulo"></b>
+    <span class="archivo" id="visor-archivo"></span>
+    <button id="visor-cerrar" type="button">Cerrar ✕</button>
+  </div>
+  <div id="mapa"></div>
+  <div id="visor-leyenda">
+    <b id="leyenda-indice"></b>
+    <span id="leyenda-min"></span>
+    <div class="leyenda-barra"></div>
+    <span id="leyenda-max"></span>
+  </div>
+</div>
+
+<script src="/web/leaflet/leaflet.js"></script>
 <script>
 "use strict";
 
@@ -281,6 +337,9 @@ const elChips = $("chips-etapas"), elBarra = $("barra");
 const elEtiquetaEtapa = $("etiqueta-etapa"), elEtiquetaTiempo = $("etiqueta-tiempo");
 const elBtnCancelar = $("btn-cancelar"), elDetalleLog = $("detalle-log"), elLogTail = $("log-tail");
 const elResultados = $("resultados"), elAvisoServidor = $("aviso-servidor");
+const elVisor = $("visor"), elVisorTitulo = $("visor-titulo"), elVisorArchivo = $("visor-archivo");
+const elVisorCerrar = $("visor-cerrar"), elLeyenda = $("visor-leyenda");
+const elLeyendaIndice = $("leyenda-indice"), elLeyendaMin = $("leyenda-min"), elLeyendaMax = $("leyenda-max");
 
 /* ================= helpers ================= */
 
@@ -629,11 +688,97 @@ function renderResultados(productos) {
     ruta.className = "ruta";
     ruta.textContent = p.archivo;
     pie.append(b, ruta);
+    if (p.tipo !== "nube") {
+      const btnMapa = document.createElement("button");
+      btnMapa.type = "button";
+      btnMapa.className = "chico ver-mapa";
+      btnMapa.textContent = "Ver mapa";
+      btnMapa.addEventListener("click", () => abrirVisor(p));
+      pie.appendChild(btnMapa);
+    }
     tarjeta.appendChild(pie);
     grilla.appendChild(tarjeta);
   }
   elResultados.appendChild(grilla);
 }
+
+/* ================= visor de mapas ================= */
+
+// Escalas fijas de color por índice — las mismas del servidor: dos vuelos
+// del mismo lote se comparan a simple vista porque los colores no cambian.
+const ESCALA_FIJA = {
+  ndvi:  [0.15, 0.90],
+  gndvi: [0.15, 0.80],
+  ndre:  [0.05, 0.45],
+  lci:   [0.05, 0.55],
+};
+// zoom máximo razonable por producto: el RGB tiene el detalle más fino,
+// los índices van al GSD multiespectral y el DSM es el más suave.
+const MAX_ZOOM = { rgb: 22, orto: 22, dsm: 20 }; // resto (índices): 21
+const MIN_ZOOM = 12;
+
+let mapa = null;          // instancia Leaflet, se crea una vez y se reusa
+let capaProducto = null;  // capa de tiles del producto abierto
+
+function nombreArchivo(ruta) { return String(ruta).split(/[\\/]/).pop(); }
+
+async function abrirVisor(p) {
+  if (typeof L === "undefined") {
+    alert("No se pudo cargar Leaflet (/web/leaflet/leaflet.js). Revisá que el servidor esté corriendo desde el repo.");
+    return;
+  }
+  // los productos viven directo en la carpeta de salida: alcanza el nombre
+  const archivo = nombreArchivo(p.archivo);
+  const tipo = p.tipo === "orto" ? "rgb" : p.tipo; // el orto multibanda se ve como RGB (bandas 1-3)
+
+  let limites;
+  try {
+    const resp = await fetch("/api/tiles/bounds?archivo=" + encodeURIComponent(archivo));
+    if (!resp.ok) {
+      const det = await detalleError(resp);
+      alert("No pude ubicar el mapa: " + (det || ("error " + resp.status)));
+      return;
+    }
+    const b = (await resp.json()).bounds; // [oeste, sur, este, norte]
+    limites = L.latLngBounds([b[1], b[0]], [b[3], b[2]]);
+  } catch (e) {
+    alert("No se pudo consultar al servidor para abrir el mapa.");
+    return;
+  }
+
+  const info = PRODUCTOS.find((x) => x.id === p.tipo);
+  elVisorTitulo.textContent = info ? info.nombre : p.tipo;
+  elVisorArchivo.textContent = archivo;
+  elVisor.classList.add("abierto");
+
+  const maxZoom = MAX_ZOOM[p.tipo] || 21;
+  if (!mapa) {
+    // sin mapa base de internet: el producto ES el mapa, el fondo queda gris
+    mapa = L.map("mapa", { minZoom: MIN_ZOOM, maxZoom: maxZoom });
+  }
+  mapa.setMaxZoom(maxZoom);
+  if (capaProducto) { mapa.removeLayer(capaProducto); capaProducto = null; }
+  capaProducto = L.tileLayer(
+    "/api/tiles/{z}/{x}/{y}.png?archivo=" + encodeURIComponent(archivo)
+      + "&tipo=" + encodeURIComponent(tipo),
+    { tileSize: 256, minZoom: MIN_ZOOM, maxZoom: maxZoom, bounds: limites, noWrap: true });
+  capaProducto.addTo(mapa);
+  mapa.invalidateSize(false);                // el contenedor recién se hizo visible
+  // sin animación: si no, el encuadre puede quedar a medio camino al reabrir
+  mapa.fitBounds(limites, { padding: [24, 24], animate: false });
+
+  const escala = ESCALA_FIJA[p.tipo];        // leyenda solo para índices
+  if (escala) {
+    elLeyendaIndice.textContent = info ? info.nombre : p.tipo;
+    elLeyendaMin.textContent = escala[0].toFixed(2);
+    elLeyendaMax.textContent = escala[1].toFixed(2);
+    elLeyenda.classList.add("visible");
+  } else {
+    elLeyenda.classList.remove("visible");
+  }
+}
+
+function cerrarVisor() { elVisor.classList.remove("abierto"); }
 
 /* ================= arranque ================= */
 
@@ -647,6 +792,10 @@ elBtnGenerar.addEventListener("click", generar);
 elBtnCancelar.addEventListener("click", cancelar);
 elDetalleLog.addEventListener("toggle", () => {
   if (elDetalleLog.open) elLogTail.scrollTop = elLogTail.scrollHeight;
+});
+elVisorCerrar.addEventListener("click", cerrarVisor);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && elVisor.classList.contains("abierto")) cerrarVisor();
 });
 
 consultarEstado(); // restaura un trabajo en curso si el servidor ya tenía uno

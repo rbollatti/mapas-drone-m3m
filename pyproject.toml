@@ -11,8 +11,9 @@ license = { text = "MIT" }
 authors = [{ name = "R. Bollatti" }]
 
 [project.optional-dependencies]
-# interfaz web local (python -m m3m.servidor); el pipeline CLI no la necesita
-ui = ["fastapi>=0.110", "uvicorn>=0.27"]
+# interfaz web local (python -m m3m.servidor); el pipeline CLI no la necesita.
+# rio-tiler renderiza los tiles del visor de mapas de la página.
+ui = ["fastapi>=0.110", "uvicorn>=0.27", "rio-tiler>=6"]
 
 [tool.setuptools]
 packages = ["m3m"]

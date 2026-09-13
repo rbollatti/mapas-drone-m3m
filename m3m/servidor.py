@@ -16,6 +16,15 @@ API (JSON, prefijo /api)
   ``docker rm -f`` del contenedor del trabajo.
 - ``GET  /api/vista?archivo=<path>`` — miniatura PNG de un GeoTIFF, SOLO si
   está dentro de la carpeta de salida del último trabajo.
+- ``GET  /api/tiles/{z}/{x}/{y}.png?archivo=<rel>&tipo=<producto>`` — tile XYZ
+  (WebMercator, 256 px) renderizado al vuelo desde el GeoTIFF con rio-tiler,
+  para el visor Leaflet de la página. ``archivo`` es SIEMPRE relativo a la
+  carpeta de salida del último trabajo (misma validación que /api/vista).
+  Índices → paleta RdYlGn con escala fija por índice; dsm → paleta terrain
+  con p2-p98; rgb → render directo. Cache LRU chico en memoria.
+- ``GET  /api/tiles/bounds?archivo=<rel>`` — bounds del raster en EPSG:4326
+  (``[oeste, sur, este, norte]``) para centrar el mapa.
+- ``GET  /api/tiles/stats?archivo=<rel>`` — min/max/p2/p50/p98 por banda.
 
 El estado se persiste en ``<repo>/trabajos/ultimo.json`` y el log del trabajo
 en ``<repo>/trabajos/ultimo.log``: si el servidor se reinicia con un trabajo
@@ -37,13 +46,16 @@ import threading
 import time
 import webbrowser
 import zlib
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 try:
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import FileResponse, HTMLResponse, Response
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError as e:  # el pipeline CLI no necesita fastapi: solo avisa acá
     raise SystemExit(
@@ -64,6 +76,30 @@ HOST = "127.0.0.1"
 PUERTO = 8600
 EXT_FOTO = {".tif", ".tiff", ".jpg", ".jpeg"}
 MINIATURA_PX = 1200  # lado máximo de la miniatura PNG
+
+# --- visor de mapas (tiles dinámicos con rio-tiler) ---
+TILE_PX = 256
+# Escala fija de colores por índice (misma en la leyenda del visor): rangos
+# agronómicos típicos para que dos vuelos sean comparables a simple vista.
+ESCALA_FIJA: dict[str, tuple[float, float]] = {
+    "ndvi": (0.15, 0.90),
+    "gndvi": (0.15, 0.80),
+    "ndre": (0.05, 0.45),
+    "lci": (0.05, 0.55),
+}
+TIPOS_VISOR = ("ndvi", "gndvi", "ndre", "lci", "dsm", "rgb")
+
+# Cache LRU de tiles renderizados (PNG): el pan/zoom del visor repite tiles y
+# lo caro es el primer render. ~256 tiles × ~50-100 KB ≈ 25 MB máx.
+_TILES_CACHE_MAX = 256
+_tiles_cache: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
+_tiles_lock = threading.Lock()
+
+# Cache de estadísticas por (path, mtime): alimenta la escala del DSM (p2-p98)
+# y el estirado de ortos float.
+_STATS_CACHE_MAX = 32
+_stats_cache: OrderedDict[tuple[str, int], dict[str, Any]] = OrderedDict()
+_stats_lock = threading.Lock()
 
 _RE_ETAPA = re.compile(rb"##ETAPA## ([a-z]+) (\d+)")
 
@@ -345,6 +381,10 @@ async def _ciclo_vida(app: FastAPI):
 
 app = FastAPI(title="m3m — interfaz web local", lifespan=_ciclo_vida)
 
+# Estáticos de la página: Leaflet vendoreado en m3m/web/leaflet/ (licencia
+# BSD-2, ver m3m/web/leaflet/LICENSE) — sin CDN, la página funciona offline.
+app.mount("/web", StaticFiles(directory=str(WEB)), name="web")
+
 
 class TrabajoNuevo(BaseModel):
     misiones: list[str]
@@ -497,6 +537,196 @@ def vista(archivo: str):
         png = _miniatura(f)
     except Exception as e:  # rasterio/numpy: error legible en vez de 500 pelado
         raise HTTPException(500, f"no pude renderizar {f.name}: {type(e).__name__}: {e}")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+# ------------------------------------------- visor de mapas (tiles XYZ) ----
+
+def _resolver_en_salida(archivo: str) -> Path:
+    """Path RELATIVO bajo la salida del último trabajo -> Path real validado.
+
+    Misma política que /api/vista (solo archivos de esa carpeta), pero acá el
+    cliente manda el path relativo: nada absoluto, nada con ``..``, solo .tif.
+    """
+    with _lock:
+        salida = _trabajo.get("salida")
+    if not salida:
+        raise HTTPException(404, "todavía no hay ningún trabajo con salida conocida")
+    archivo = (archivo or "").strip().replace("\\", "/")
+    if not archivo:
+        raise HTTPException(400, "falta el parámetro 'archivo'")
+    p = Path(archivo)
+    if p.is_absolute() or p.drive or ".." in p.parts:
+        raise HTTPException(400, "'archivo' debe ser un path relativo a la carpeta "
+                                 "de salida del último trabajo, sin '..'")
+    if p.suffix.lower() not in (".tif", ".tiff"):
+        raise HTTPException(415, "el visor solo sirve GeoTIFF (.tif)")
+    base = Path(salida).resolve()
+    real = (base / p).resolve()
+    # normcase: Windows es case-insensitive y resolve() puede cambiar mayúsculas
+    b, o = os.path.normcase(str(base)), os.path.normcase(str(real))
+    if not (o == b or o.startswith(b + os.sep)):
+        raise HTTPException(403, "solo se sirven archivos de la carpeta de salida del último trabajo")
+    if not real.is_file():
+        raise HTTPException(404, f"no existe {p.as_posix()} en la salida del último trabajo")
+    return real
+
+
+def _rio_tiler_disponible() -> None:
+    """El visor necesita rio-tiler (extra [ui]); el resto del servidor no."""
+    try:
+        import rio_tiler  # noqa: F401
+    except ImportError:
+        raise HTTPException(
+            500, "falta rio-tiler para el visor de mapas: pip install -e .[ui]")
+
+
+def _tipo_visor(path: Path, tipo: str) -> str:
+    """Valida ``tipo`` o lo infiere del sufijo del nombre (<nombre>_<tipo>.tif)."""
+    t = (tipo or "").strip().lower()
+    if t:
+        if t not in TIPOS_VISOR:
+            raise HTTPException(
+                400, f"tipo '{tipo}' inválido; válidos: {', '.join(TIPOS_VISOR)}")
+        return t
+    t = path.stem.rsplit("_", 1)[-1].lower()
+    if t == "orto":  # multibanda: se muestra como RGB con las bandas 1-3
+        return "rgb"
+    if t in TIPOS_VISOR:
+        return t
+    raise HTTPException(400, "no pude inferir el tipo de producto; pasá ?tipo=")
+
+
+def _stats_de(path: Path) -> dict[str, Any]:
+    """min/max/p2/p50/p98 por banda (lectura decimada vía overviews), cacheado
+    por (path, mtime)."""
+    clave = (str(path), int(path.stat().st_mtime))
+    with _stats_lock:
+        cached = _stats_cache.get(clave)
+        if cached is not None:
+            _stats_cache.move_to_end(clave)
+            return cached
+
+    from rio_tiler.io import Reader  # import pesado, adentro
+
+    with Reader(str(path)) as r:
+        st = r.statistics(percentiles=[2, 98])
+    bandas = {
+        b: {"min": round(float(s.min), 4), "max": round(float(s.max), 4),
+            "p2": round(float(s.percentile_2), 4), "p50": round(float(s.median), 4),
+            "p98": round(float(s.percentile_98), 4)}
+        for b, s in st.items()
+    }
+    with _stats_lock:
+        _stats_cache[clave] = bandas
+        while len(_stats_cache) > _STATS_CACHE_MAX:
+            _stats_cache.popitem(last=False)
+    return bandas
+
+
+def _escala_de(path: Path, tipo: str) -> tuple[float, float]:
+    """Rango de colores: la escala fija del índice (comparable entre vuelos);
+    para el DSM, p2-p98 del raster (el rango depende de cada terreno)."""
+    if tipo in ESCALA_FIJA:
+        return ESCALA_FIJA[tipo]
+    b1 = _stats_de(path)["b1"]
+    return float(b1["p2"]), float(b1["p98"])
+
+
+def _render_tile(path: Path, tipo: str, z: int, x: int, y: int) -> bytes:
+    """PNG 256 px del tile XYZ WebMercator ``z/x/y`` del GeoTIFF.
+
+    - índices / DSM (1 banda): reescala a la escala del tipo y colorea
+      (RdYlGn los índices, terrain el DSM); nodata queda transparente.
+    - rgb / orto (>=3 bandas): bandas 1-3; uint8 directo, float estirado p2-p98.
+
+    Deja propagar ``rio_tiler.errors.TileOutsideBounds`` (→ 404 en el endpoint).
+    """
+    clave = (str(path), int(path.stat().st_mtime), tipo, z, x, y)
+    with _tiles_lock:
+        png = _tiles_cache.get(clave)
+        if png is not None:
+            _tiles_cache.move_to_end(clave)
+            return png
+
+    from rio_tiler.colormap import cmap  # imports pesados, adentro
+    from rio_tiler.io import Reader
+
+    with Reader(str(path)) as r:
+        multibanda = tipo == "rgb" and r.dataset.count >= 3
+        img = r.tile(x, y, z, tilesize=TILE_PX,
+                     indexes=(1, 2, 3) if multibanda else None,
+                     resampling_method="nearest", reproject_method="nearest")
+        if multibanda:
+            if img.data.dtype != "uint8":  # orto float (reflectancia): estirar
+                st = _stats_de(path)
+                img.rescale(in_range=tuple(
+                    (st[f"b{i}"]["p2"], st[f"b{i}"]["p98"]) for i in (1, 2, 3)))
+            png = img.render(img_format="PNG")
+        else:
+            vmin, vmax = _escala_de(path, tipo)
+            img.rescale(in_range=((vmin, vmax),))
+            png = img.render(
+                img_format="PNG",
+                colormap=cmap.get("terrain" if tipo == "dsm" else "rdylgn"))
+
+    with _tiles_lock:
+        _tiles_cache[clave] = png
+        while len(_tiles_cache) > _TILES_CACHE_MAX:
+            _tiles_cache.popitem(last=False)
+    return png
+
+
+@app.get("/api/tiles/bounds")
+def tiles_bounds(archivo: str = ""):
+    f = _resolver_en_salida(archivo)
+    import rasterio
+    from rasterio.warp import transform_bounds
+
+    with rasterio.open(f) as ds:
+        if ds.crs is None:
+            raise HTTPException(422, f"{f.name} no tiene CRS: no se puede ubicar en el mapa")
+        oeste, sur, este, norte = transform_bounds(
+            ds.crs, "EPSG:4326", *ds.bounds, densify_pts=21)
+    return {"archivo": archivo, "bounds": [oeste, sur, este, norte]}
+
+
+@app.get("/api/tiles/stats")
+def tiles_stats(archivo: str = "", tipo: str = ""):
+    f = _resolver_en_salida(archivo)
+    _rio_tiler_disponible()
+    t = _tipo_visor(f, tipo)
+    try:
+        bandas = _stats_de(f)
+        escala = None if t == "rgb" else list(_escala_de(f, t))
+    except HTTPException:
+        raise
+    except Exception as e:  # error legible en vez de 500 pelado
+        raise HTTPException(
+            500, f"no pude calcular estadísticas de {f.name}: {type(e).__name__}: {e}")
+    return {"archivo": archivo, "tipo": t, "bandas": bandas, "escala": escala}
+
+
+@app.get("/api/tiles/{z}/{x}/{y}.png")
+def tiles_png(z: int, x: int, y: int, archivo: str = "", tipo: str = ""):
+    if not (0 <= z <= 24):
+        raise HTTPException(400, "zoom fuera de rango (0-24)")
+    f = _resolver_en_salida(archivo)
+    _rio_tiler_disponible()
+    t = _tipo_visor(f, tipo)
+
+    from rio_tiler.errors import TileOutsideBounds
+
+    try:
+        png = _render_tile(f, t, z, x, y)
+    except TileOutsideBounds:
+        raise HTTPException(404, "tile fuera del área del raster")
+    except HTTPException:
+        raise
+    except Exception as e:  # rio-tiler/rasterio: error legible en vez de 500 pelado
+        raise HTTPException(
+            500, f"no pude renderizar el tile de {f.name}: {type(e).__name__}: {e}")
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 

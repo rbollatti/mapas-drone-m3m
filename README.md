@@ -66,7 +66,14 @@ the products you want and press "Generar". Progress by stage, the log and
 product previews all show up on the page. Everything runs on your machine —
 nothing gets uploaded. To try it without a drone or Docker, start the server
 with the environment variable `M3M_SIMULACRO=1`: a ~20-second demo pipeline
-generates small synthetic maps.
+generates synthetic maps.
+
+Each finished product also gets a **"Ver mapa" button**: an interactive map
+viewer (pan/zoom) rendered on the fly from the GeoTIFF, right in the page.
+Indices use a fixed color scale (NDVI 0.15-0.90, GNDVI 0.15-0.80, NDRE
+0.05-0.45, LCI 0.05-0.55) so two flights of the same field are directly
+comparable; the DSM gets a terrain palette. No basemap and no internet —
+the viewer works fully offline.
 
 ## License and acknowledgements
 
@@ -77,3 +84,8 @@ The photogrammetry is done by
 **[OpenDroneMap](https://www.opendronemap.org/)** (AGPL license), which this
 pipeline runs as an external program via Docker. Without the huge amount of
 work by the ODM community, none of this would be possible — thank you.
+
+The map viewer of the local interface uses
+**[Leaflet](https://leafletjs.com/)** 1.9.4 (BSD-2-Clause license, (c)
+Volodymyr Agafonkin and contributors), bundled in `m3m/web/leaflet/` so the
+page works offline.
