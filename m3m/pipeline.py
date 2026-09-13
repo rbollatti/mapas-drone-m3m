@@ -151,7 +151,9 @@ def escanear_misiones(misiones: list[Path], cuarentena: Path) -> tuple[int, list
             etapa("escaneo", 100 * i / max(len(archivos), 1))
         try:
             with open(f, "rb") as fh:
-                exifread.process_file(fh, details=False)
+                # details=True OBLIGATORIO: es el modo con que ODM parsea (entra al
+                # MakerNote); con False el escaneo deja pasar corruptos que ODM no tolera
+                exifread.process_file(fh, details=True)
         except Exception as e:  # cualquier excepción de parseo = EXIF corrupto -> cuarentena
             print(f"EXIF corrupto en {f.name}: {type(e).__name__}: {e}", flush=True)
             corruptos.append(f)
