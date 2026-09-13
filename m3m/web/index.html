@@ -229,17 +229,32 @@
   #visor-leyenda.visible { display: flex; }
   #visor-leyenda b { font-size: 12.5px; }
   .leyenda-fila { display: flex; align-items: center; gap: 8px; }
+  /* la barra de la leyenda es además el riel del slider manual de escala:
+     el degradé pinta solo el tramo [vmin, vmax] vigente, el resto queda gris */
   .leyenda-barra {
-    width: 150px; height: 12px; border-radius: 3px; border: 1px solid var(--borde);
+    position: relative; width: 180px; height: 12px; border-radius: 3px;
+    border: 1px solid var(--borde); background: #e5e7eb;
+    cursor: ew-resize; touch-action: none; user-select: none;
+  }
+  .leyenda-grad {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 100%; border-radius: 2px;
     /* RdYlGn de ColorBrewer, mismas 11 clases que usa el servidor */
     background: linear-gradient(to right, #a50026, #d73027, #f46d43, #fdae61,
       #fee08b, #ffffbf, #d9ef8b, #a6d96a, #66bd63, #1a9850, #006837);
   }
-  .leyenda-barra.terrain {
+  .leyenda-barra.terrain .leyenda-grad {
     /* 'terrain' de matplotlib, mismas anclas que usa el servidor para el DSM */
     background: linear-gradient(to right, #333399 0%, #0099ff 15%, #00cc66 25%,
       #ffff99 50%, #805c54 75%, #ffffff 100%);
   }
+  .manija {
+    position: absolute; top: -4px; width: 12px; height: 18px; border-radius: 6px;
+    background: #fff; border: 2px solid var(--verde);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .3);
+  }
+  /* sin dominio todavía (DSM esperando stats): degradé completo, sin manijas */
+  .leyenda-barra.inerte { cursor: default; }
+  .leyenda-barra.inerte .manija { display: none; }
   /* botones de escala de colores (Fija / Contraste), junto a la leyenda */
   .leyenda-escala { display: flex; align-items: center; gap: 6px; }
   .btn-escala { font-size: 12px; padding: 2px 10px; font-weight: 500; border-radius: 999px; }
@@ -370,7 +385,11 @@
     <div class="leyenda-fila">
       <b id="leyenda-indice"></b>
       <span id="leyenda-min"></span>
-      <div class="leyenda-barra" id="leyenda-barra"></div>
+      <div class="leyenda-barra" id="leyenda-barra">
+        <div class="leyenda-grad" id="leyenda-grad"></div>
+        <div class="manija" id="manija-min"></div>
+        <div class="manija" id="manija-max"></div>
+      </div>
       <span id="leyenda-max"></span>
     </div>
     <div class="leyenda-escala">
@@ -429,6 +448,7 @@ const elVisor = $("visor"), elVisorTitulo = $("visor-titulo"), elVisorArchivo = 
 const elVisorCerrar = $("visor-cerrar"), elLeyenda = $("visor-leyenda");
 const elLeyendaIndice = $("leyenda-indice"), elLeyendaMin = $("leyenda-min"), elLeyendaMax = $("leyenda-max");
 const elLeyendaBarra = $("leyenda-barra"), elLeyendaNota = $("leyenda-nota");
+const elLeyendaGrad = $("leyenda-grad"), elManijaMin = $("manija-min"), elManijaMax = $("manija-max");
 const elBtnEscalaFija = $("btn-escala-fija"), elBtnEscalaContraste = $("btn-escala-contraste");
 const elCantHist = $("cant-hist"), elListaHistorial = $("lista-historial");
 const elResultadosHist = $("resultados-historial"), elMsgHistorial = $("msg-historial");
@@ -963,8 +983,11 @@ const MIN_ZOOM = 12;
 let mapa = null;          // instancia Leaflet, se crea una vez y se reusa
 let capaProducto = null;  // capa de tiles del producto abierto
 let capaVisor = null;     // datos de la capa abierta (para recrearla al cambiar de escala)
-let escalaModo = "fija";  // "fija" | "contraste"; se resetea a "fija" en cada apertura
+let escalaModo = "fija";  // "fija" | "contraste" | "manual"; vuelve a "fija" en cada apertura
 let visorSeq = 0;         // invalida fetches de stats viejos al abrir otro producto
+let rangoVigente = null;  // [vmin, vmax] mostrado en la leyenda / aplicado a los tiles
+let dragManija = null;    // "min" | "max" mientras se arrastra una manija del slider
+let timerTiles = null;    // debounce: recarga de tiles al soltar/pausar el drag manual
 
 function nombreArchivo(ruta) { return String(ruta).split(/[\\/]/).pop(); }
 
@@ -1047,10 +1070,114 @@ function rangoContraste() {
   return capaVisor.tipo === "dsm" ? [s.min, s.max] : [s.p2, s.p98];
 }
 
+/* --------- slider manual: dos manijas sobre la barra de la leyenda --------- */
+
+// dominio total del slider según producto: índices → unión de la escala fija
+// con el mín-máx del vuelo (fija ±0.10 hasta tener stats); DSM → mín-máx
+function dominioSlider() {
+  const c = capaVisor;
+  if (!c || c.tipo === "rgb") return null;
+  if (c.tipo === "dsm") {
+    if (!c.stats || !(c.stats.max > c.stats.min)) return null;
+    return [c.stats.min, c.stats.max];
+  }
+  const esc = ESCALA_FIJA[c.tipo];
+  if (!c.stats) return [esc[0] - 0.10, esc[1] + 0.10];
+  return [Math.min(c.stats.min, esc[0]), Math.max(c.stats.max, esc[1])];
+}
+
+// reubica manijas y tramo con degradé según rangoVigente dentro del dominio
+function pintarSlider() {
+  const dom = dominioSlider();
+  const inerte = !dom || !rangoVigente;
+  elLeyendaBarra.classList.toggle("inerte", inerte);
+  let f0 = 0, f1 = 1;
+  if (!inerte) {
+    const frac = (v) => Math.max(0, Math.min(1, (v - dom[0]) / (dom[1] - dom[0])));
+    f0 = frac(rangoVigente[0]); f1 = frac(rangoVigente[1]);
+  }
+  elLeyendaGrad.style.left = (f0 * 100) + "%";
+  elLeyendaGrad.style.width = (Math.max(0, f1 - f0) * 100) + "%";
+  elManijaMin.style.left = "calc(" + (f0 * 100) + "% - 6px)";
+  elManijaMax.style.left = "calc(" + (f1 * 100) + "% - 6px)";
+}
+
+// actualiza los números de la leyenda + el slider; el rango "vigente" es el
+// que están viendo los tiles (o el que se va a pedir al soltar la manija)
+function setRangoVigente(vmin, vmax) {
+  rangoVigente = [vmin, vmax];
+  elLeyendaMin.textContent = formatearValorEscala(vmin);
+  elLeyendaMax.textContent = formatearValorEscala(vmax);
+  pintarSlider();
+}
+
+function valorDePuntero(clientX, dom) {
+  const r = elLeyendaBarra.getBoundingClientRect();
+  const t = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  const paso = capaVisor.tipo === "dsm" ? 0.1 : 0.01;  // como los decimales
+  return Math.round((dom[0] + t * (dom[1] - dom[0])) / paso) * paso;
+}
+
+// arrastrar una manija = modo manual: pills apagados y, en índices, la nota
+// de que los colores dejan de ser comparables entre vuelos
+function ponerModoManual() {
+  if (escalaModo === "manual") return;
+  escalaModo = "manual";
+  elBtnEscalaFija.classList.remove("activa");
+  elBtnEscalaContraste.classList.remove("activa");
+  elLeyendaNota.hidden = capaVisor.tipo === "dsm";
+}
+
+function moverManija(v) {
+  const dom = dominioSlider();
+  if (!dom || !rangoVigente) return;
+  const gap = (dom[1] - dom[0]) * 0.02;  // las manijas nunca se cruzan
+  let [a, b] = rangoVigente;
+  if (dragManija === "min") a = Math.max(dom[0], Math.min(v, b - gap));
+  else b = Math.min(dom[1], Math.max(v, a + gap));
+  ponerModoManual();
+  setRangoVigente(a, b);
+  programarRecargaTiles();
+}
+
+// los números se mueven EN VIVO con la manija; los tiles, recién ~300 ms
+// después de soltar (o de pausar el drag): una sola recarga por gesto
+function programarRecargaTiles() {
+  clearTimeout(timerTiles);
+  timerTiles = setTimeout(() => {
+    if (!capaVisor || escalaModo !== "manual" || !rangoVigente) return;
+    const [a, b] = rangoVigente;
+    if (b > a) ponerCapaTiles(a, b);  // el servidor rechaza vmax <= vmin
+  }, 300);
+}
+
+// pointer events (mouse y touch): el track entero agarra la manija más
+// cercana al click, como el EscalaSlider de Surco
+function agarrarManija(e) {
+  const dom = dominioSlider();
+  if (!dom || !rangoVigente) return;  // rgb no tiene leyenda; DSM sin stats
+  e.preventDefault();
+  const v = valorDePuntero(e.clientX, dom);
+  dragManija = Math.abs(v - rangoVigente[0]) <= Math.abs(v - rangoVigente[1]) ? "min" : "max";
+  try { elLeyendaBarra.setPointerCapture(e.pointerId); } catch (err) {}
+  moverManija(v);
+}
+
+function arrastrarManija(e) {
+  if (!dragManija) return;
+  const dom = dominioSlider();
+  if (dom) moverManija(valorDePuntero(e.clientX, dom));
+}
+
+function soltarManija() { dragManija = null; }
+
 // leyenda + botones de escala al abrir un producto: solo bandas únicas
 // (índices y DSM); el rgb no tiene escala de colores
 function prepararLeyenda(p) {
   escalaModo = "fija";
+  clearTimeout(timerTiles);
+  dragManija = null;
+  rangoVigente = null;
   const seq = ++visorSeq;
   const c = capaVisor;
   if (c.tipo === "rgb") {
@@ -1070,11 +1197,12 @@ function prepararLeyenda(p) {
   elLeyendaNota.hidden = true;
 
   if (esDsm) {
+    // sin dominio hasta que lleguen las stats: el slider queda inerte
     elLeyendaMin.textContent = "…"; elLeyendaMax.textContent = "…";
+    pintarSlider();
   } else {
     const esc = ESCALA_FIJA[c.tipo];
-    elLeyendaMin.textContent = esc[0].toFixed(2);
-    elLeyendaMax.textContent = esc[1].toFixed(2);
+    setRangoVigente(esc[0], esc[1]);
   }
   elLeyenda.classList.add("visible");
 
@@ -1086,9 +1214,10 @@ function prepararLeyenda(p) {
     .then((datos) => {
       if (seq !== visorSeq || !datos || !datos.bandas || !datos.bandas.b1) return;
       c.stats = datos.bandas.b1;
-      if (esDsm) {
-        elLeyendaMin.textContent = formatearValorEscala(c.stats.p2);
-        elLeyendaMax.textContent = formatearValorEscala(c.stats.p98);
+      if (esDsm && escalaModo === "fija") {
+        setRangoVigente(c.stats.p2, c.stats.p98);
+      } else {
+        pintarSlider();  // con stats cambia el dominio del slider: reubicar manijas
       }
       const rango = rangoContraste();
       if (rango[1] > rango[0]) elBtnEscalaContraste.disabled = false;
@@ -1099,6 +1228,7 @@ function prepararLeyenda(p) {
 function cambiarEscala(modo) {
   if (!capaVisor || capaVisor.tipo === "rgb" || modo === escalaModo) return;
   if (modo === "contraste" && !capaVisor.stats) return;
+  clearTimeout(timerTiles);  // una recarga manual pendiente ya no corresponde
   escalaModo = modo;
   elBtnEscalaFija.classList.toggle("activa", modo === "fija");
   elBtnEscalaContraste.classList.toggle("activa", modo === "contraste");
@@ -1107,19 +1237,16 @@ function cambiarEscala(modo) {
   if (modo === "contraste") {
     const rango = rangoContraste();
     ponerCapaTiles(rango[0], rango[1]);
-    elLeyendaMin.textContent = formatearValorEscala(rango[0]);
-    elLeyendaMax.textContent = formatearValorEscala(rango[1]);
+    setRangoVigente(rango[0], rango[1]);
   } else {
     // sin vmin/vmax en la URL: el servidor vuelve a su escala default
     // (fija del índice / p2-p98 del DSM)
     ponerCapaTiles(null, null);
     if (esDsm) {
-      elLeyendaMin.textContent = formatearValorEscala(capaVisor.stats.p2);
-      elLeyendaMax.textContent = formatearValorEscala(capaVisor.stats.p98);
+      setRangoVigente(capaVisor.stats.p2, capaVisor.stats.p98);
     } else {
       const esc = ESCALA_FIJA[capaVisor.tipo];
-      elLeyendaMin.textContent = esc[0].toFixed(2);
-      elLeyendaMax.textContent = esc[1].toFixed(2);
+      setRangoVigente(esc[0], esc[1]);
     }
   }
   // estirados al vuelo, los colores de un índice dejan de ser comparables
@@ -1143,6 +1270,10 @@ elDetalleLog.addEventListener("toggle", () => {
 elVisorCerrar.addEventListener("click", cerrarVisor);
 elBtnEscalaFija.addEventListener("click", () => cambiarEscala("fija"));
 elBtnEscalaContraste.addEventListener("click", () => cambiarEscala("contraste"));
+elLeyendaBarra.addEventListener("pointerdown", agarrarManija);
+elLeyendaBarra.addEventListener("pointermove", arrastrarManija);
+elLeyendaBarra.addEventListener("pointerup", soltarManija);
+elLeyendaBarra.addEventListener("pointercancel", soltarManija);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && elVisor.classList.contains("abierto")) cerrarVisor();
 });
