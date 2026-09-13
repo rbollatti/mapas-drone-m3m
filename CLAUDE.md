@@ -135,6 +135,10 @@ serves as a format reference.
   validated in this repo: if the user accepts, **validate it first with a
   small flight**, comparing against the same flight processed without GPU,
   before relying on it. Without GPU you lose no quality, only time.
+  Key check: in the ODM log, look at the `DensifyPointCloud` command line —
+  if it says `--cuda-device -1`, ODM silently fell back to CPU (known with
+  very new GPU architectures, e.g. RTX 50-series as of late 2026) and the
+  GPU image gains nothing; stay on the standard image.
 
 ## Step 6 — Guided first flight
 
