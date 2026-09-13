@@ -5,6 +5,15 @@
 Turn the raw photos from your **DJI Mavic 3M** into maps ready to use in the
 field, with free and open-source software.
 
+## Latest updates
+
+- **More accurate elevation**: the DSM is now computed from the RGB block
+  using the camera's factory calibration and the drone's RTK — down to a few
+  centimeters of error.
+- **Built-in map viewer**: the local page now has two tabs (Generate /
+  View), a history of previous outputs, extra zoom, and an adjustable color
+  scale (fixed, per-flight contrast, or dragging the legend handles).
+
 ## What you get
 
 From one Mavic 3M flight (the photos exactly as they come off the card), the
