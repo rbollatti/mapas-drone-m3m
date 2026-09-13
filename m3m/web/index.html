@@ -1041,7 +1041,13 @@ async function abrirVisor(p) {
   prepararLeyenda(p);
 }
 
-function cerrarVisor() { elVisor.classList.remove("abierto"); }
+function cerrarVisor() {
+  // capaVisor queda (el mapa se reusa), pero una recarga manual pendiente
+  // sobre un visor cerrado no tiene sentido: se cancela acá
+  clearTimeout(timerTiles);
+  dragManija = null;
+  elVisor.classList.remove("abierto");
+}
 
 /* --------- escala de colores: Fija (comparable) vs Contraste del vuelo --- */
 
@@ -1165,6 +1171,9 @@ function agarrarManija(e) {
 
 function arrastrarManija(e) {
   if (!dragManija) return;
+  // sin botón/contacto apretado no hay drag: si el pointerup se perdió
+  // (setPointerCapture falló), esto evita el drag fantasma al pasar el mouse
+  if (e.buttons === 0) { dragManija = null; return; }
   const dom = dominioSlider();
   if (dom) moverManija(valorDePuntero(e.clientX, dom));
 }
