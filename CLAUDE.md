@@ -186,6 +186,26 @@ serves as a format reference.
   pipeline checks the workdir at startup, but the output drive also has to
   hold the final products.
 
+## Step 8 — Offer the local web interface to non-technical users
+
+If the user is not comfortable with the terminal (or just prefers clicking),
+offer them the local web interface as an alternative to the CLI of step 6:
+
+1. Install the optional extra: `pip install -e ".[ui]"` (adds
+   fastapi/uvicorn; the CLI pipeline keeps working without them).
+2. Start it with `python -m m3m.servidor` and have them open
+   http://127.0.0.1:8600 (bound to 127.0.0.1 only — nothing is exposed to
+   the network, and no data leaves the machine).
+3. The page (in Spanish) walks them through the same choices as the CLI:
+   mission folders, products, output folder, optional smoothing and the
+   experimental GPU switch. It shows per-stage progress, the pipeline log, a
+   cancel button, and PNG previews of the products when the job finishes.
+   One job at a time.
+4. To demo the interface without real data or Docker, set the environment
+   variable `M3M_SIMULACRO=1` before starting the server: a ~20-second
+   simulated pipeline goes through every stage and writes small synthetic
+   GeoTIFFs.
+
 ---
 
 If anything in this guide doesn't match what you see on the machine

@@ -51,6 +51,23 @@ primer vuelo paso a paso. Las instrucciones que sigue están en `CLAUDE.md`.
 
 Si te sirvió, dejá una estrella así sé que se usa.
 
+## Interfaz local (sin terminal)
+
+¿Preferís botones antes que comandos? El repo incluye una interfaz web local
+mínima:
+
+```
+pip install -e ".[ui]"
+python -m m3m.servidor
+```
+
+Después abrí http://127.0.0.1:8600: elegí las carpetas de misión del vuelo,
+tildá los productos que querés y apretá "Generar". El progreso por etapa, el
+log y las vistas previas de los productos se ven en la misma página. Todo
+corre en tu máquina — no se sube nada. Para probarla sin drone ni Docker,
+arrancá el servidor con la variable de entorno `M3M_SIMULACRO=1`: un pipeline
+de demo de ~20 segundos genera mapas sintéticos chiquitos.
+
 ## Licencia y agradecimientos
 
 Este proyecto es **MIT** (ver `LICENSE`): usalo, modificalo y compartilo

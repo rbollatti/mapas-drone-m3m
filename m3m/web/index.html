@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapas drone M3M</title>
+<style>
+  :root {
+    --verde: #2e7d32;
+    --verde-oscuro: #1b5e20;
+    --gris: #6b7280;
+    --borde: #d8dce0;
+    --fondo: #f6f7f5;
+    --tarjeta: #ffffff;
+    --rojo: #b91c1c;
+    --ambar: #92600a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--fondo);
+    color: #1f2937;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .contenedor { max-width: 780px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { margin-bottom: 20px; }
+  header h1 { font-size: 22px; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--gris); }
+
+  .aviso-servidor {
+    display: none;
+    background: #fef2f2; border: 1px solid #fecaca; color: var(--rojo);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;
+  }
+  .aviso-servidor.visible { display: block; }
+
+  section.paso {
+    background: var(--tarjeta);
+    border: 1px solid var(--borde);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .titulo-paso { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .num {
+    flex: none; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--verde); color: #fff; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; font-size: 15px;
+  }
+  .titulo-paso h2 { font-size: 17px; margin: 0; }
+  .ayuda { color: var(--gris); font-size: 13.5px; margin: 2px 0 10px; }
+
+  label { display: block; font-weight: 600; font-size: 13.5px; margin-bottom: 4px; }
+  input[type="text"], input[type="number"] {
+    width: 100%; padding: 8px 10px; border: 1px solid #c4c9cf; border-radius: 7px;
+    font: inherit; background: #fff;
+  }
+  input[type="text"]:focus, input[type="number"]:focus {
+    outline: 2px solid #a5d6a7; border-color: var(--verde);
+  }
+  .fila { display: flex; gap: 8px; }
+  .fila input[type="text"] { flex: 1; }
+
+  button {
+    font: inherit; font-weight: 600; border-radius: 7px; cursor: pointer;
+    border: 1px solid #c4c9cf; background: #fff; color: #1f2937; padding: 8px 14px;
+  }
+  button:hover { background: #f3f4f6; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  button.primario {
+    background: var(--verde); border-color: var(--verde); color: #fff;
+  }
+  button.primario:hover:not(:disabled) { background: var(--verde-oscuro); }
+  button.peligro { color: var(--rojo); border-color: #fca5a5; }
+  button.peligro:hover:not(:disabled) { background: #fef2f2; }
+  button.chico { font-size: 12.5px; padding: 3px 9px; font-weight: 500; }
+
+  .msg { font-size: 13.5px; margin-top: 8px; }
+  .msg.error { color: var(--rojo); }
+  .msg.info { color: var(--gris); }
+
+  #lista-misiones { margin-top: 12px; }
+  .mision {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border: 1px solid var(--borde); border-radius: 7px;
+    margin-bottom: 6px; background: #fafbfa;
+  }
+  .mision input { width: 16px; height: 16px; accent-color: var(--verde); }
+  .mision .nombre { font-family: ui-monospace, Consolas, monospace; font-size: 13.5px; }
+  .mision .fotos { margin-left: auto; color: var(--gris); font-size: 13px; white-space: nowrap; }
+
+  .grilla-productos {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 6px; margin-bottom: 14px;
+  }
+  .producto {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 7px 10px; border: 1px solid var(--borde); border-radius: 7px; background: #fafbfa;
+  }
+  .producto input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--verde); }
+  .producto b { font-size: 13.5px; display: block; }
+  .producto span { font-size: 12.5px; color: var(--gris); }
+
+  .opciones { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; align-items: flex-end; }
+  .opciones .campo { min-width: 180px; }
+  .check-linea { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+  .check-linea input { width: 16px; height: 16px; accent-color: var(--verde); }
+
+  #btn-generar { width: 100%; padding: 13px; font-size: 17px; margin-top: 4px; }
+
+  /* --- estado del trabajo --- */
+  #panel-estado { display: none; margin-top: 16px; }
+  .banner { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
+  .banner.ok    { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+  .banner.mal   { background: #fef2f2; border: 1px solid #fecaca; color: var(--rojo); }
+  .banner.gris  { background: #f3f4f6; border: 1px solid #d1d5db; color: #374151; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .chip {
+    font-size: 12.5px; padding: 3px 10px; border-radius: 999px;
+    background: #eef0ee; color: var(--gris); border: 1px solid var(--borde);
+  }
+  .chip.hecha { background: #e8f5e9; color: #1b5e20; border-color: #a5d6a7; }
+  .chip.actual { background: var(--verde); color: #fff; border-color: var(--verde); font-weight: 600; }
+
+  .barra-fondo {
+    height: 14px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin: 6px 0 4px;
+  }
+  .barra {
+    height: 100%; width: 0; background: var(--verde);
+    border-radius: 999px; transition: width .6s ease;
+  }
+  .linea-progreso { display: flex; justify-content: space-between; font-size: 13.5px; color: var(--gris); }
+
+  details.log { margin-top: 12px; }
+  details.log summary { cursor: pointer; font-size: 13.5px; color: var(--gris); user-select: none; }
+  details.log pre {
+    background: #111827; color: #d1d5db; border-radius: 8px; padding: 10px 12px;
+    font-size: 12px; line-height: 1.45; max-height: 320px; overflow: auto;
+    white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;
+  }
+
+  #btn-cancelar { margin-top: 12px; }
+
+  .grilla-resultados {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px; margin-top: 12px;
+  }
+  .resultado {
+    border: 1px solid var(--borde); border-radius: 8px; overflow: hidden; background: #fafbfa;
+  }
+  .resultado img { display: block; width: 100%; height: 160px; object-fit: contain; background: #fff; }
+  .resultado .sin-vista {
+    height: 160px; display: flex; align-items: center; justify-content: center;
+    color: var(--gris); font-size: 13px; background: #fff;
+  }
+  .resultado .pie { padding: 8px 10px; }
+  .resultado .pie b { font-size: 13.5px; }
+  .resultado .pie .ruta {
+    font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--gris);
+    word-break: break-all; margin-top: 2px;
+  }
+  footer { color: var(--gris); font-size: 12.5px; margin-top: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="contenedor">
+
+  <header>
+    <h1>Mapas drone M3M</h1>
+    <p>Del vuelo crudo del Mavic 3M a los mapas del lote — todo local, en esta máquina.</p>
+  </header>
+
+  <div id="aviso-servidor" class="aviso-servidor">
+    No se pudo conectar con el servidor. Verificá que siga corriendo
+    (<code>python -m m3m.servidor</code>) — esta página se reconecta sola.
+  </div>
+
+  <!-- ============ PASO 1: misiones ============ -->
+  <section class="paso">
+    <div class="titulo-paso"><div class="num">1</div><h2>Elegí las misiones del vuelo</h2></div>
+    <p class="ayuda">Pegá la carpeta donde están las misiones del drone (las subcarpetas
+      <code>DJI_*</code> que crea en la tarjeta). Un vuelo largo puede tener varias.</p>
+    <label for="raiz">Carpeta raíz del vuelo</label>
+    <div class="fila">
+      <input type="text" id="raiz" placeholder="Ej.: D:\Vuelos\2027-01-08" spellcheck="false">
+      <button id="btn-buscar" type="button">Buscar misiones</button>
+    </div>
+    <div id="msg-misiones" class="msg"></div>
+    <div id="lista-misiones"></div>
+  </section>
+
+  <!-- ============ PASO 2: productos y salida ============ -->
+  <section class="paso">
+    <div class="titulo-paso"><div class="num">2</div><h2>Productos y carpeta de salida</h2></div>
+    <div class="grilla-productos" id="grilla-productos"></div>
+
+    <label for="salida">Carpeta de salida</label>
+    <input type="text" id="salida" placeholder="Ej.: D:\odm\lote_norte_ene27" spellcheck="false">
+    <p class="ayuda" style="margin-top:4px">El nombre de la carpeta pasa a ser el nombre del
+      proyecto y el prefijo de los archivos finales.</p>
+
+    <div class="opciones">
+      <div class="campo">
+        <label for="suavizado">Suavizado de índices (m) — opcional</label>
+        <input type="number" id="suavizado" min="0" step="0.5" placeholder="0 = apagado">
+      </div>
+      <div class="campo">
+        <label class="check-linea"><input type="checkbox" id="gpu">
+          Usar GPU NVIDIA <span style="color:var(--ambar)">(experimental)</span></label>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PASO 3: generar ============ -->
+  <section class="paso">
+    <div class="titulo-paso"><div class="num">3</div><h2>Generar los mapas</h2></div>
+    <button id="btn-generar" class="primario" type="button">Generar</button>
+    <div id="msg-generar" class="msg"></div>
+
+    <div id="panel-estado">
+      <div id="banner-estado" class="banner gris"></div>
+      <div id="bloque-progreso">
+        <div class="chips" id="chips-etapas"></div>
+        <div class="barra-fondo"><div class="barra" id="barra"></div></div>
+        <div class="linea-progreso">
+          <span id="etiqueta-etapa"></span>
+          <span id="etiqueta-tiempo"></span>
+        </div>
+        <button id="btn-cancelar" class="peligro" type="button">Cancelar trabajo</button>
+      </div>
+      <details class="log" id="detalle-log">
+        <summary>Ver log del pipeline</summary>
+        <pre id="log-tail"></pre>
+      </details>
+      <div id="resultados"></div>
+    </div>
+  </section>
+
+  <footer>mapas-drone-m3m — corre 100&nbsp;% en tu computadora, nada sale de acá.</footer>
+</div>
+
+<script>
+"use strict";
+
+/* ================= constantes ================= */
+
+const PRODUCTOS = [
+  { id: "ndvi",  nombre: "NDVI",  desc: "vigor general del cultivo" },
+  { id: "gndvi", nombre: "GNDVI", desc: "clorofila / nitrógeno" },
+  { id: "ndre",  nombre: "NDRE",  desc: "vigor en cultivos densos" },
+  { id: "lci",   nombre: "LCI",   desc: "clorofila de hoja" },
+  { id: "orto",  nombre: "Orto multibanda", desc: "mapa foto con las 4 bandas" },
+  { id: "dsm",   nombre: "Elevación (DSM)", desc: "lomas, bajos y microrelieve" },
+  { id: "nube",  nombre: "Nube de puntos",  desc: "modelo 3D del lote (LAZ)" },
+  { id: "rgb",   nombre: "Orto RGB",        desc: "foto aérea en color real" },
+];
+const PRODUCTOS_DEFAULT = ["ndvi", "ndre", "orto", "dsm"];
+
+const ETAPAS = ["escaneo", "calibracion", "odm", "productos", "rgb", "movida", "limpieza"];
+const NOMBRE_ETAPA = {
+  escaneo:     "Escaneo de fotos (EXIF)",
+  calibracion: "Calibración radiométrica",
+  odm:         "Fotogrametría (OpenDroneMap) — la etapa larga",
+  productos:   "Generación de índices y productos",
+  rgb:         "Ortomosaico RGB",
+  movida:      "Copia a la carpeta de salida",
+  limpieza:    "Limpieza de temporales",
+};
+const POLL_MS = 2000;
+
+/* ================= referencias DOM ================= */
+
+const $ = (id) => document.getElementById(id);
+const elRaiz = $("raiz"), elSalida = $("salida"), elSuavizado = $("suavizado"), elGpu = $("gpu");
+const elListaMisiones = $("lista-misiones"), elMsgMisiones = $("msg-misiones");
+const elBtnBuscar = $("btn-buscar"), elBtnGenerar = $("btn-generar"), elMsgGenerar = $("msg-generar");
+const elPanel = $("panel-estado"), elBanner = $("banner-estado"), elBloqueProg = $("bloque-progreso");
+const elChips = $("chips-etapas"), elBarra = $("barra");
+const elEtiquetaEtapa = $("etiqueta-etapa"), elEtiquetaTiempo = $("etiqueta-tiempo");
+const elBtnCancelar = $("btn-cancelar"), elDetalleLog = $("detalle-log"), elLogTail = $("log-tail");
+const elResultados = $("resultados"), elAvisoServidor = $("aviso-servidor");
+
+/* ================= helpers ================= */
+
+function guardar(clave, valor) { try { localStorage.setItem(clave, valor); } catch (e) {} }
+function leerGuardado(clave)   { try { return localStorage.getItem(clave) || ""; } catch (e) { return ""; } }
+
+function parseFecha(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return new Date(v < 1e12 ? v * 1000 : v);
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function formatearDuracion(ms) {
+  if (!isFinite(ms) || ms < 0) return "";
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  if (h > 0) return h + " h " + m + " min";
+  if (m > 0) return m + " min " + String(r).padStart(2, "0") + " s";
+  return r + " s";
+}
+
+async function detalleError(resp) {
+  // FastAPI suele responder {detail: "..."}; si no, texto plano.
+  try {
+    const j = await resp.clone().json();
+    if (j && typeof j.detail === "string") return j.detail;
+    if (j && j.detail) return JSON.stringify(j.detail);
+  } catch (e) {}
+  try { return (await resp.text()).slice(0, 300); } catch (e) { return ""; }
+}
+
+/* ================= paso 1: misiones ================= */
+
+async function buscarMisiones() {
+  const raiz = elRaiz.value.trim();
+  elListaMisiones.textContent = "";
+  if (!raiz) {
+    elMsgMisiones.className = "msg error";
+    elMsgMisiones.textContent = "Escribí la carpeta raíz del vuelo.";
+    return;
+  }
+  guardar("m3m_raiz", raiz);
+  elBtnBuscar.disabled = true;
+  elMsgMisiones.className = "msg info";
+  elMsgMisiones.textContent = "Buscando…";
+  try {
+    const resp = await fetch("/api/misiones?raiz=" + encodeURIComponent(raiz));
+    if (!resp.ok) {
+      const det = await detalleError(resp);
+      elMsgMisiones.className = "msg error";
+      elMsgMisiones.textContent = det || ("Error del servidor (" + resp.status + ").");
+      return;
+    }
+    const datos = await resp.json();
+    const misiones = (datos && datos.misiones) || [];
+    if (misiones.length === 0) {
+      elMsgMisiones.className = "msg info";
+      elMsgMisiones.textContent = "No se encontraron carpetas DJI_* en esa ruta.";
+      return;
+    }
+    elMsgMisiones.className = "msg info";
+    elMsgMisiones.textContent = misiones.length + " misión(es) encontrada(s). Tildá las que van al procesamiento:";
+    renderMisiones(misiones);
+  } catch (e) {
+    elMsgMisiones.className = "msg error";
+    elMsgMisiones.textContent = "No se pudo consultar al servidor. ¿Sigue corriendo python -m m3m.servidor?";
+  } finally {
+    elBtnBuscar.disabled = false;
+  }
+}
+
+function renderMisiones(misiones) {
+  elListaMisiones.textContent = "";
+
+  const barra = document.createElement("div");
+  barra.style.cssText = "display:flex;gap:6px;margin-bottom:8px";
+  const btnTodas = document.createElement("button");
+  btnTodas.type = "button"; btnTodas.className = "chico"; btnTodas.textContent = "Todas";
+  const btnNinguna = document.createElement("button");
+  btnNinguna.type = "button"; btnNinguna.className = "chico"; btnNinguna.textContent = "Ninguna";
+  btnTodas.addEventListener("click", () => marcarTodas(true));
+  btnNinguna.addEventListener("click", () => marcarTodas(false));
+  barra.append(btnTodas, btnNinguna);
+  elListaMisiones.appendChild(barra);
+
+  for (const m of misiones) {
+    const fila = document.createElement("label");
+    fila.className = "mision";
+    const chk = document.createElement("input");
+    chk.type = "checkbox"; chk.checked = true;
+    chk.dataset.dir = m.dir;
+    const nombre = document.createElement("span");
+    nombre.className = "nombre"; nombre.textContent = m.nombre;
+    nombre.title = m.dir;
+    const fotos = document.createElement("span");
+    fotos.className = "fotos"; fotos.textContent = m.fotos + " fotos";
+    fila.append(chk, nombre, fotos);
+    elListaMisiones.appendChild(fila);
+  }
+}
+
+function marcarTodas(valor) {
+  for (const c of elListaMisiones.querySelectorAll("input[type=checkbox]")) c.checked = valor;
+}
+
+function misionesSeleccionadas() {
+  return [...elListaMisiones.querySelectorAll("input[type=checkbox]:checked")]
+    .map((c) => c.dataset.dir);
+}
+
+/* ================= paso 2: productos ================= */
+
+function renderProductos() {
+  const grilla = $("grilla-productos");
+  for (const p of PRODUCTOS) {
+    const fila = document.createElement("label");
+    fila.className = "producto";
+    const chk = document.createElement("input");
+    chk.type = "checkbox"; chk.value = p.id;
+    chk.checked = PRODUCTOS_DEFAULT.includes(p.id);
+    const texto = document.createElement("div");
+    const b = document.createElement("b"); b.textContent = p.nombre;
+    const s = document.createElement("span"); s.textContent = p.desc;
+    texto.append(b, s);
+    fila.append(chk, texto);
+    grilla.appendChild(fila);
+  }
+}
+
+function productosSeleccionados() {
+  return [...$("grilla-productos").querySelectorAll("input:checked")].map((c) => c.value);
+}
+
+/* ================= paso 3: trabajo ================= */
+
+let enviando = false;
+
+async function generar() {
+  elMsgGenerar.textContent = "";
+  const misiones = misionesSeleccionadas();
+  const productos = productosSeleccionados();
+  const salida = elSalida.value.trim();
+
+  const faltas = [];
+  if (misiones.length === 0) faltas.push("elegí al menos una misión (paso 1)");
+  if (productos.length === 0) faltas.push("tildá al menos un producto (paso 2)");
+  if (!salida) faltas.push("escribí la carpeta de salida (paso 2)");
+  if (faltas.length) {
+    elMsgGenerar.className = "msg error";
+    elMsgGenerar.textContent = "Antes de generar: " + faltas.join("; ") + ".";
+    return;
+  }
+  guardar("m3m_salida", salida);
+
+  const cuerpo = {
+    misiones: misiones,
+    productos: productos,
+    salida: salida,
+    suavizado_m: parseFloat(elSuavizado.value) || 0,
+    gpu: elGpu.checked,
+  };
+
+  enviando = true;
+  actualizarBotones();
+  try {
+    const resp = await fetch("/api/trabajo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo),
+    });
+    if (resp.status === 409) {
+      elMsgGenerar.className = "msg error";
+      elMsgGenerar.textContent = "Ya hay un trabajo corriendo: esperá a que termine o cancelalo.";
+    } else if (!resp.ok) {
+      const det = await detalleError(resp);
+      elMsgGenerar.className = "msg error";
+      elMsgGenerar.textContent = det || ("El servidor rechazó el trabajo (" + resp.status + ").");
+    } else {
+      elMsgGenerar.className = "msg info";
+      elMsgGenerar.textContent = "Trabajo lanzado.";
+      consultarEstado(); // refresco inmediato, sin esperar el próximo poll
+    }
+  } catch (e) {
+    elMsgGenerar.className = "msg error";
+    elMsgGenerar.textContent = "No se pudo contactar al servidor para lanzar el trabajo.";
+  } finally {
+    enviando = false;
+    actualizarBotones();
+  }
+}
+
+async function cancelar() {
+  if (!confirm("¿Cancelar el trabajo en curso? Lo procesado hasta acá se pierde.")) return;
+  elBtnCancelar.disabled = true;
+  try {
+    await fetch("/api/trabajo/cancelar", { method: "POST" });
+    consultarEstado();
+  } catch (e) {
+    /* el próximo poll refleja lo que haya pasado */
+  } finally {
+    elBtnCancelar.disabled = false;
+  }
+}
+
+/* ================= polling del estado ================= */
+
+let ultimoEstado = null;
+let timerPoll = null;
+
+function programarPoll() {
+  clearTimeout(timerPoll);
+  timerPoll = setTimeout(consultarEstado, POLL_MS);
+}
+
+async function consultarEstado() {
+  clearTimeout(timerPoll);
+  try {
+    const resp = await fetch("/api/trabajo");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const t = await resp.json();
+    elAvisoServidor.classList.remove("visible");
+    ultimoEstado = t;
+    renderEstado(t);
+  } catch (e) {
+    elAvisoServidor.classList.add("visible");
+  } finally {
+    programarPoll(); // SIEMPRE se reprograma: se reconecta solo si el servidor vuelve
+  }
+}
+
+function actualizarBotones() {
+  const corriendo = ultimoEstado && ultimoEstado.estado === "corriendo";
+  elBtnGenerar.disabled = enviando || corriendo;
+  elBtnGenerar.textContent = corriendo ? "Generando…" : "Generar";
+}
+
+function renderEstado(t) {
+  actualizarBotones();
+  if (!t || t.estado === "inactivo") {
+    elPanel.style.display = "none";
+    return;
+  }
+  elPanel.style.display = "block";
+
+  const corriendo = t.estado === "corriendo";
+  elBloqueProg.style.display = corriendo ? "block" : "none";
+
+  // banner
+  const inicio = parseFecha(t.inicio), fin = parseFecha(t.fin);
+  const duracion = inicio && fin ? formatearDuracion(fin - inicio) : "";
+  if (t.estado === "hecho") {
+    elBanner.className = "banner ok";
+    elBanner.textContent = "Trabajo terminado" + (duracion ? " en " + duracion : "") + ". Productos abajo.";
+  } else if (t.estado === "error") {
+    elBanner.className = "banner mal";
+    elBanner.textContent = "El trabajo terminó con error: " + (t.error || "sin detalle") +
+      ". El log de abajo tiene más información.";
+  } else if (t.estado === "cancelado") {
+    elBanner.className = "banner gris";
+    elBanner.textContent = "Trabajo cancelado.";
+  } else {
+    elBanner.className = "banner gris";
+    elBanner.textContent = "Procesando… podés dejar esta página abierta; se actualiza sola cada 2 segundos.";
+  }
+
+  // progreso por etapa
+  if (corriendo) {
+    renderChips(t.etapa);
+    const pct = Math.max(0, Math.min(100, Number(t.pct) || 0));
+    elBarra.style.width = pct + "%";
+    elEtiquetaEtapa.textContent = (NOMBRE_ETAPA[t.etapa] || t.etapa || "arrancando…") + " — " + pct + " %";
+    elEtiquetaTiempo.textContent = inicio ? "lleva " + formatearDuracion(Date.now() - inicio.getTime()) : "";
+  }
+
+  // log
+  if (t.log_tail) {
+    elDetalleLog.style.display = "block";
+    if (elLogTail.textContent !== t.log_tail) {
+      elLogTail.textContent = t.log_tail;
+      if (elDetalleLog.open) elLogTail.scrollTop = elLogTail.scrollHeight;
+    }
+  } else {
+    elDetalleLog.style.display = "none";
+  }
+
+  // resultados
+  if (t.estado === "hecho" && Array.isArray(t.productos) && t.productos.length) {
+    renderResultados(t.productos);
+  } else {
+    elResultados.textContent = "";
+  }
+}
+
+function renderChips(etapaActual) {
+  elChips.textContent = "";
+  const idx = ETAPAS.indexOf(etapaActual);
+  ETAPAS.forEach((slug, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (i < idx ? " hecha" : i === idx ? " actual" : "");
+    chip.textContent = slug;
+    elChips.appendChild(chip);
+  });
+}
+
+let claveResultados = ""; // evita re-crear los <img> (y re-pedir los PNG) en cada poll
+
+function renderResultados(productos) {
+  const clave = JSON.stringify(productos);
+  if (clave === claveResultados) return;
+  claveResultados = clave;
+
+  elResultados.textContent = "";
+  const grilla = document.createElement("div");
+  grilla.className = "grilla-resultados";
+
+  for (const p of productos) {
+    const tarjeta = document.createElement("div");
+    tarjeta.className = "resultado";
+
+    if (p.tipo === "nube") {
+      const sin = document.createElement("div");
+      sin.className = "sin-vista";
+      sin.textContent = "Nube de puntos (LAZ) — abrila en tu GIS";
+      tarjeta.appendChild(sin);
+    } else {
+      const img = document.createElement("img");
+      img.alt = "Vista previa " + p.tipo;
+      img.loading = "lazy";
+      img.src = "/api/vista?archivo=" + encodeURIComponent(p.archivo);
+      img.addEventListener("error", () => {
+        const sin = document.createElement("div");
+        sin.className = "sin-vista";
+        sin.textContent = "Sin vista previa";
+        img.replaceWith(sin);
+      });
+      tarjeta.appendChild(img);
+    }
+
+    const pie = document.createElement("div");
+    pie.className = "pie";
+    const b = document.createElement("b");
+    const info = PRODUCTOS.find((x) => x.id === p.tipo);
+    b.textContent = info ? info.nombre : p.tipo;
+    const ruta = document.createElement("div");
+    ruta.className = "ruta";
+    ruta.textContent = p.archivo;
+    pie.append(b, ruta);
+    tarjeta.appendChild(pie);
+    grilla.appendChild(tarjeta);
+  }
+  elResultados.appendChild(grilla);
+}
+
+/* ================= arranque ================= */
+
+renderProductos();
+elRaiz.value = leerGuardado("m3m_raiz");
+elSalida.value = leerGuardado("m3m_salida");
+
+elBtnBuscar.addEventListener("click", buscarMisiones);
+elRaiz.addEventListener("keydown", (e) => { if (e.key === "Enter") buscarMisiones(); });
+elBtnGenerar.addEventListener("click", generar);
+elBtnCancelar.addEventListener("click", cancelar);
+elDetalleLog.addEventListener("toggle", () => {
+  if (elDetalleLog.open) elLogTail.scrollTop = elLogTail.scrollHeight;
+});
+
+consultarEstado(); // restaura un trabajo en curso si el servidor ya tenía uno
+</script>
+</body>
+</html>

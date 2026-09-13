@@ -52,6 +52,22 @@ Prefer to install by hand? The steps are in
 
 If this tool helped you, star the repo so I know it's being used.
 
+## Local interface (no terminal)
+
+Prefer buttons over commands? The repo includes a minimal local web UI:
+
+```
+pip install -e ".[ui]"
+python -m m3m.servidor
+```
+
+Then open http://127.0.0.1:8600: pick the flight's mission folders, tick
+the products you want and press "Generar". Progress by stage, the log and
+product previews all show up on the page. Everything runs on your machine —
+nothing gets uploaded. To try it without a drone or Docker, start the server
+with the environment variable `M3M_SIMULACRO=1`: a ~20-second demo pipeline
+generates small synthetic maps.
+
 ## License and acknowledgements
 
 This project is **MIT** (see `LICENSE`): use it, modify it and share it
